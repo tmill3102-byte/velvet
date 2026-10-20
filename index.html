@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0B0306">
 <meta name="color-scheme" content="dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -101,7 +101,7 @@
   <video id="vid" playsinline webkit-playsinline preload="auto"></video>
   <div class="pl-vig"></div>
   <div class="spinner"></div>
-  <div class="pl-ui pl-top"><button class="iconbtn" id="plClose" aria-label="Close"><span data-ic="back"></span></button><span class="pl-title" id="plTitle"></span><span class="sp"></span><span class="pl-brand"><span data-ic="lockSm"></span>Velvet · Private Gallery</span><button class="iconbtn" id="plMore" aria-label="More"><span data-ic="more"></span></button></div>
+  <div class="pl-ui pl-top"><button class="iconbtn" id="plClose" aria-label="Close"><span data-ic="back"></span></button><span class="pl-title" id="plTitle"></span><span class="sp"></span><span class="pl-brand"><span data-ic="lockSm"></span>Velvet · Private Gallery</span><button class="iconbtn" id="plThumb" aria-label="Set as preview" title="Set this frame as the preview"><span data-ic="photo"></span></button><button class="iconbtn" id="plMore" aria-label="More"><span data-ic="more"></span></button></div>
   <div class="pl-ui pl-center">
     <button class="skip" id="plBack" aria-label="Back 10 seconds"><span data-ic="rew"></span><b>10</b></button>
     <button class="bigplay" id="plPlay" aria-label="Play/Pause"><span data-ic="play"></span></button>

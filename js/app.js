@@ -1,4 +1,5 @@
 import * as Store from './store.js';
+import * as Thumbs from './thumbs.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -238,8 +239,9 @@ const io = new IntersectionObserver(ents => ents.forEach(en => { if (en.isInters
 const ctx = new WeakMap();
 function tileHTML(it, i, opts = {}) {
   const v = it.type === 'video';
-  return `<div class="tile${opts.veiled ? ' veiled' : ''}${sel.has(it.id) ? ' picked' : ''}" data-id="${it.id}" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))};--fb:${fbFor(it.id)};--i:${i % 14}" tabindex="0" role="button" aria-label="${esc(it.title)}">
-    <div class="media"><img alt="" data-tid="${it.id}"></div><div class="tint user"></div><div class="shade"></div>
+  const ph = it.thumb ? '' : `<div class="ph">${v ? IC.play.replace('<svg', '<svg class="phic"') : IC.photo.replace('<svg', '<svg class="phic"')}<small>${v ? (Thumbs.isHevc(it.codec) ? 'HEVC video' : 'Video') : (Thumbs.isHeic(it.mime, it.name) ? 'HEIC photo' : 'Photo')} · no preview</small></div>`;
+  return `<div class="tile${it.thumb ? '' : ' nothumb'}${opts.veiled ? ' veiled' : ''}${sel.has(it.id) ? ' picked' : ''}" data-id="${it.id}" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))};--fb:${fbFor(it.id)};--i:${i % 14}" tabindex="0" role="button" aria-label="${esc(it.title)}">
+    <div class="media"><img alt="" data-tid="${it.id}">${ph}</div><div class="tint user"></div><div class="shade"></div>
     ${v ? `<div class="playbub">${IC.play}</div><span class="dur">${fmt(it.dur)}</span>` : `<span class="badge">${it.mime === 'image/gif' ? '<b style="font-size:8px">GIF</b>' : IC.photo}</span>`}
     ${opts.veiled ? `<div class="veil" style="position:absolute;inset:0;display:grid;place-items:center">${IC.eye}</div>` : ''}
     <span class="sel">${IC.check}</span>
@@ -455,6 +457,7 @@ async function renderProfile() {
       <div class="row">${IC.download}<div class="meta">Back up library<small>One encrypted .velvet file. Move it to another device and restore.</small></div><button class="btn btn-primary btn-sm" id="bkBtn">Export</button></div>
       <div class="row">${IC.upload}<div class="meta">Restore from backup<small>Replaces the library on this device</small></div><button class="btn btn-ghost btn-sm" id="rsBtn">Restore</button></div>
       ${host ? `<div class="row">${IC.folder}<div class="meta">Data folder<small>Where Velvet keeps its encrypted data</small></div><button class="btn btn-ghost btn-sm" id="dataBtn">Open</button></div>` : ''}
+      <div class="row">${IC.photo}<div class="meta">Regenerate previews<small>Rebuild thumbnails for everything already in Velvet</small></div><button class="btn btn-ghost btn-sm" id="regenBtn">Rebuild</button></div>
       <div class="row">${IC.trash}<div class="meta">Erase everything<small>Deletes the passcode and every file in Velvet</small></div><button class="btn btn-danger btn-sm" id="wipeBtn">Erase</button></div>
     </div>
     ${!host && isIOS && !standalone ? `<div class="install-tip"><b>Install Velvet:</b> tap the Share button, then <b>Add to Home Screen</b>. Safari can clear data from websites you haven’t opened for a while. Installed apps are much safer, and you should still export a backup now and then.</div>` : ''}
@@ -467,7 +470,7 @@ async function renderProfile() {
   $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
-  $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
+  $('#regenBtn').onclick = () => regenPreviews(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
 async function vaultPinFlow() {
   const s = idx.settings;
@@ -509,31 +512,7 @@ $('#file').addEventListener('change', e => { const fs = Array.from(e.target.file
 $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.files || []).map(f => ({ file: f, folder: (f.webkitRelativePath || '').split('/')[0] || null })); e.target.value = ''; importFiles(fs, null); });
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
-async function canvasThumb(src, w, h) {
-  const max = 640, k = Math.min(1, max / Math.max(w, h)); const c = document.createElement('canvas');
-  c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
-  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
-  return new Promise(r => c.toBlob(b => r(b), 'image/jpeg', .82));
-}
-async function imageThumb(file) {
-  let bmp = null;
-  try { bmp = await createImageBitmap(file); } catch (e) { }
-  if (bmp) { const b = await canvasThumb(bmp, bmp.width, bmp.height); const r = { blob: b, w: bmp.width, h: bmp.height }; bmp.close && bmp.close(); return r; }
-  const url = URL.createObjectURL(file);
-  try { const img = new Image(); img.src = url; await withTimeout(img.decode(), 15000); return { blob: await canvasThumb(img, img.naturalWidth, img.naturalHeight), w: img.naturalWidth, h: img.naturalHeight }; }
-  finally { URL.revokeObjectURL(url); }
-}
-async function videoThumb(file) {
-  const url = URL.createObjectURL(file); const v = document.createElement('video');
-  v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.preload = 'auto'; v.src = url;
-  try {
-    await withTimeout(new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('cannot decode')); }), 15000);
-    const dur = v.duration, t = isFinite(dur) ? Math.min(1, dur * 0.1) : 0;
-    if (t > 0) { v.currentTime = t; await withTimeout(new Promise(res => { v.onseeked = res; }), 8000).catch(() => { }); }
-    const w = v.videoWidth, h = v.videoHeight; if (!w) return { blob: null, dur, w: 16, h: 9 };
-    return { blob: await canvasThumb(v, w, h), dur, w, h };
-  } finally { v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url); }
-}
+async function makeThumb(f, type, mime) { return type === 'video' ? Thumbs.videoThumb(f, mime) : Thumbs.imageThumb(f, mime); }
 async function importFiles(entries, colId) {
   if (!idx) return;
   const ok = entries.filter(e => mimeOf(e.file)), skipped = entries.length - ok.length;
@@ -547,13 +526,13 @@ async function importFiles(entries, colId) {
     progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, done / ok.length);
     const id = uid();
     try {
-      let th = null; try { th = await withTimeout(type === 'video' ? videoThumb(f) : imageThumb(f), 30000); } catch (err) { console.warn('thumb failed', f.name, err); }
-      if (type === 'photo' && !th) throw new Error('This image format can’t be displayed here');
+      let th = null; try { th = await withTimeout(makeThumb(f, type, mime), 45000); } catch (err) { console.warn('thumb failed', f.name, err); }
+      if (type === 'photo' && !th && !Thumbs.isHeic(mime, f.name)) throw new Error('This image format can’t be displayed here');
       const res = await Store.putFile(id, f, p => progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, (done + p * .95) / ok.length));
       let thumb = null;
       if (th && th.blob) { const tr = await Store.putFile(id + '_t', th.blob); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
       const it = { id, type, title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Untitled', name: f.name, ext: extOf(f.name), mime, size: f.size, chunks: res.chunks, stored: res.stored,
-        added: Date.now() + done, modified: f.lastModified || null, tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h };
+        added: Date.now() + done, modified: f.lastModified || null, tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h, codec: th && th.codec || '', thumbT: th && th.t != null ? th.t : null };
       if (colId && colById(colId)) it.cols.push(colId);
       if (e.folder) {
         let c = folderCols.get(e.folder) || idx.collections.find(x => x.name === e.folder);
@@ -592,10 +571,44 @@ window.addEventListener('drop', async e => {
 });
 
 /* ---------- item actions ---------- */
+async function replaceThumb(it, blob) {
+  if (it.thumb) await Store.deleteFile(it.thumb.id);
+  const tid = it.id + '_t', tr = await Store.putFile(tid, blob); it.thumb = { id: tid, chunks: tr.chunks, stored: tr.stored };
+  if (thumbs.has(it.id)) { URL.revokeObjectURL(thumbs.get(it.id)); thumbs.delete(it.id); }
+}
+async function setPreviewFromPlayer() {
+  if (!curVid) return; const it = curVid;
+  try {
+    if (!vid.videoWidth || vid.readyState < 2) throw new Error('not ready');
+    const b = await Thumbs.frameFromVideo(vid);
+    await replaceThumb(it, b); it.thumbT = +vid.currentTime.toFixed(3); it.w = vid.videoWidth; it.h = vid.videoHeight; it.ar = it.w / it.h;
+    await save(); render(); flash('Preview set to ' + fmt(vid.currentTime));
+  } catch (e) { console.warn('set preview', e); flash('Couldn’t capture this frame. Try again once the video is playing.'); }
+}
+async function regenPreviews(opts = {}) {
+  const items = idx.items.slice(); if (!items.length) { toast('Nothing to rebuild yet'); return; }
+  if (!opts.noConfirm && !(await confirmBox('Regenerate previews?', `Velvet will decrypt each of your ${items.length} item(s) on this device and rebuild its thumbnail. Your files aren’t changed.`, 'Rebuild'))) return;
+  let ok = 0, none = 0;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]; progress(`Rebuilding previews · ${i + 1} of ${items.length}`, i / items.length);
+    try {
+      if (it.size > LIMIT) { none++; continue; }
+      const b = await Store.readFile(it.id, it.chunks, it.mime); if (!Store.isUnlocked()) return;
+      const f = new File([b], it.name || it.title, { type: it.mime });
+      const th = await withTimeout(makeThumb(f, it.type, it.mime), 45000).catch(e => { console.warn('regen', it.name, e); return null; });
+      if (th) { if (th.dur) it.dur = th.dur; if (th.codec) it.codec = th.codec; if (th.w && th.h && (th.blob || !it.thumb)) { it.w = th.w; it.h = th.h; it.ar = th.w / th.h; } }
+      if (th && th.blob) { await replaceThumb(it, th.blob); if (th.t != null) it.thumbT = th.t; ok++; } else none++;
+    } catch (e) { console.warn('regen failed', it.name, e); none++; }
+    if (i % 10 === 9) await Store.saveIndex(idx);
+  }
+  await Store.saveIndex(idx); progress(null); render();
+  toast(`Rebuilt ${ok} preview${ok === 1 ? '' : 's'}` + (none ? ` · ${none} couldn’t be read on this device` : ''));
+}
 async function getFull(it, onP) {
   let u = fulls.get(it.id); if (u) { fulls.delete(it.id); fulls.set(it.id, u); return u; }
   const type = it.type === 'video' && it.mime === 'video/quicktime' && !isIOS ? 'video/mp4' : it.mime;
-  const b = await Store.readFile(it.id, it.chunks, type, onP); if (!Store.isUnlocked()) throw new Error('locked');
+  let b = await Store.readFile(it.id, it.chunks, type, onP); if (!Store.isUnlocked()) throw new Error('locked');
+  if (it.type === 'photo' && Thumbs.isHeic(it.mime, it.name)) b = await Thumbs.displayableImage(b, it.mime, it.name);
   u = URL.createObjectURL(b); fulls.set(it.id, u);
   const maxKeep = 6; for (const [k, v] of fulls) { if (fulls.size <= maxKeep) break; if (k !== it.id && (!curVid || k !== curVid.id)) { URL.revokeObjectURL(v); fulls.delete(k); } }
   if (it.type === 'video') for (const [k, v] of fulls) { const o = itemById(k); if (k !== it.id && o && o.type === 'video') { URL.revokeObjectURL(v); fulls.delete(k); } } // keep only one decrypted video in memory
@@ -741,12 +754,13 @@ function renderRelated() {
 $('#rel').addEventListener('click', e => { const r = e.target.closest('.rel-item'); if (!r) return; const it = itemById(r.dataset.id); if (it && it !== curVid) openPlayer(it, plList); });
 function togglePlay() { if (!vid.src) return; if (vid.paused || vid.ended) { const p = vid.play(); if (p && p.catch) p.catch(() => { }); } else vid.pause(); }
 function syncPlay() { const n = vid.paused ? 'play' : 'pause'; setIcon($('#plPlay'), n); setIcon($('#cPlay'), n); if (vid.paused) { pl.classList.remove('idle'); clearTimeout(hideT); } else wake(); }
-let flashT; function flash(m, sticky) { const el = $('#plMsg'); el.textContent = m; el.classList.add('show'); clearTimeout(flashT); if (!sticky) flashT = setTimeout(() => el.classList.remove('show'), 1100); }
+let flashT; function flash(m, sticky) { const el = $('#plMsg'); el.textContent = m; el.classList.add('show'); clearTimeout(flashT); if (!sticky) flashT = setTimeout(() => el.classList.remove("show"), Math.max(1100, m.length * 45)); }
 function skip(d) { if (!isFinite(vid.duration)) return; vid.currentTime = Math.max(0, Math.min(vid.duration - .05, vid.currentTime + d)); flash((d > 0 ? '+' : '−') + Math.abs(d) + 's'); wake(); }
 $('#plPlay').onclick = $('#cPlay').onclick = togglePlay; $('#plBack').onclick = $('#cBack').onclick = () => skip(-10); $('#plFwd').onclick = $('#cFwd').onclick = () => skip(10);
 $('#cSpeed').onclick = () => { speedI = (speedI + 1) % SPEEDS.length; vid.playbackRate = SPEEDS[speedI]; $('#cSpeed').textContent = SPEEDS[speedI] + 'x'; flash('Speed ' + SPEEDS[speedI] + 'x'); };
 $('#cMute').onclick = () => { vid.muted = !vid.muted; setIcon($('#cMute'), vid.muted ? 'mute' : 'vol'); flash(vid.muted ? 'Muted' : 'Sound on'); };
 $('#cFav').onclick = () => { if (curVid) toggleFav(curVid); };
+$('#plThumb').onclick = () => setPreviewFromPlayer();
 $('#plMore').onclick = () => { if (curVid) { vid.pause(); itemSheet(curVid); } };
 $('#cFull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
@@ -761,7 +775,7 @@ vid.addEventListener('waiting', () => pl.classList.add('loading'));
 vid.addEventListener('loadedmetadata', () => { vid.playbackRate = SPEEDS[speedI]; if (curVid && isFinite(vid.duration) && Math.abs((curVid.dur || 0) - vid.duration) > .5) { curVid.dur = vid.duration; save(); } updProg(); });
 vid.addEventListener('timeupdate', updProg); vid.addEventListener('progress', updProg);
 vid.addEventListener('ended', () => { pl.classList.remove('idle'); const i = plList.indexOf(curVid); const n = plList[(i + 1) % plList.length]; if (n && n !== curVid) { flash('Up next: ' + n.title); const c = curVid; setTimeout(() => { if (curVid === c && vid.ended) openPlayer(n, plList); }, 1600); } });
-vid.addEventListener('error', () => { if (curVid && vid.getAttribute('src')) { pl.classList.remove('loading'); flash('This video format can’t play here (try H.264 MP4)'); } });
+vid.addEventListener('error', () => { if (curVid && vid.getAttribute('src')) { pl.classList.remove('loading'); flash(Thumbs.isHevc(curVid.codec) ? 'This is an HEVC (iPhone) video, which this device can’t decode. It plays on iPhone; on Windows install “HEVC Video Extensions”, or record in “Most Compatible”.' : 'This video format can’t play here (try H.264 MP4)'); } });
 vid.addEventListener('click', togglePlay);
 function updProg() {
   const d = vid.duration || (curVid && curVid.dur) || 0, t = vid.currentTime || 0, p = d ? Math.min(100, t / d * 100) : 0;
@@ -840,4 +854,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
 })();
-window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection };
+window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs };

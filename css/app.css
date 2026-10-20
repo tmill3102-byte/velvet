@@ -140,3 +140,13 @@ input,textarea,.selectable{-webkit-user-select:text;user-select:text}
   .toolrow .chips{flex:1 1 auto;min-width:0;margin:0 0 0 -16px;padding:2px 4px 2px 16px}
   .toolrow .tools{flex:none}
 }
+/* preview placeholder (file kept, but this device can't draw a preview, e.g. HEVC on Windows) */
+.tile.nothumb .media{background:radial-gradient(120% 90% at 30% 20%,rgba(255,46,136,.28),transparent 60%),linear-gradient(160deg,#2a0612,#12030a)}
+.tile .ph{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:#F3C7D4;text-align:center;padding:10px;pointer-events:none}
+.tile .ph .phic{width:30px;height:30px;opacity:.8}
+.tile .ph small{font-size:11px;letter-spacing:.04em;color:var(--muted)}
+.tile.nothumb .playbub{display:none}
+/* lock/setup screen: clock in normal flow so it can never overlap the logo; gate centres without clipping */
+#lock{justify-content:flex-start;overflow-y:auto;padding-top:calc(env(safe-area-inset-top,0px) + 16px);padding-bottom:calc(env(safe-area-inset-bottom,0px) + 24px)}
+#lock .clock{position:static;flex:none;margin:0 0 10px}
+#lock .gate{margin-top:auto;margin-bottom:auto}
