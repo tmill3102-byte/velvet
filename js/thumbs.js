@@ -7,8 +7,8 @@ export const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.pl
 export const isHeic = (mime, name) => /image\/hei[cf]/i.test(mime || '') || /\.(heic|heif|hif)$/i.test(name || '');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-function timed(p, ms, what) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error((what || 'step') + ' timed out')), ms))]); }
-function once(el, ev, ms) {
+export function timed(p, ms, what) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error((what || 'step') + ' timed out')), ms))]); }
+export function once(el, ev, ms) {
   return timed(new Promise((res, rej) => {
     const ok = () => { off(); res(); }, bad = () => { off(); rej(new Error('media error ' + (el.error && el.error.code))); };
     const off = () => { el.removeEventListener(ev, ok); el.removeEventListener('error', bad); };
@@ -18,7 +18,7 @@ function once(el, ev, ms) {
 
 /* draw any source into a <=640px canvas; large sources go via one intermediate step for quality
    (intermediate is at most 1280px, so no huge canvases are ever created). */
-function drawScaled(src, w, h, max = MAX) {
+export function drawScaled(src, w, h, max = MAX) {
   const k = Math.min(1, max / Math.max(w, h)), tw = Math.max(1, Math.round(w * k)), th = Math.max(1, Math.round(h * k));
   let from = src, fw = w, fh = h;
   if (k < 1 / 3) {
@@ -41,7 +41,7 @@ export function sample(c) {
 }
 // opaque solid black is what WebKit/iOS hands back when no frame has been decoded yet
 export const isBlank = st => !st.painted || (st.lum < 4 && st.sd < 2);
-const toJpeg = (c, q = .82) => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/jpeg', q));
+export const toJpeg = (c, q = .82) => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encode failed')), 'image/jpeg', q));
 
 /* ---------- photos ---------- */
 async function viaBitmap(file) {
@@ -128,7 +128,7 @@ export async function probeMp4(file) {
   return out;
 }
 const HEVC = c => /^(hvc1|hev1|dvh1|dvhe)$/.test(c || '');
-async function frameReady(v, ms = 700) {
+export async function frameReady(v, ms = 700) {
   if (v.requestVideoFrameCallback) await timed(new Promise(r => v.requestVideoFrameCallback(() => r())), ms, 'frame').catch(() => { });
   else await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 }

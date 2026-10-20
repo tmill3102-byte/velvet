@@ -1,0 +1,8 @@
+transformers.min.js: Transformers.js 4.3.1 by Hugging Face, Apache-2.0 (see LICENSE-transformers.txt).
+ort-wasm-simd-threaded.asyncify.*: ONNX Runtime Web 1.31 by Microsoft Corporation, MIT License.
+  Copyright (c) Microsoft Corporation. Permission is hereby granted, free of charge, to any person obtaining a copy of this
+  software and associated documentation files (the "Software"), to deal in the Software without restriction, including without
+  limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, subject
+  to the following conditions: The above copyright notice and this permission notice shall be included in all copies or
+  substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+models/Xenova/mobileclip_s0: Apple MobileCLIP-S0 (ONNX export by Xenova), Apple Sample Code License (see models/.../LICENSE).

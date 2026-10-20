@@ -1,5 +1,6 @@
 import * as Store from './store.js';
 import * as Thumbs from './thumbs.js';
+import * as AI from './ai.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -122,6 +123,7 @@ function render() {
   else if (view === 'search') renderSearch();
   else if (view === 'vault') renderVault();
   else if (view === 'profile') renderProfile();
+  else if (view === 'dupes') renderDupes();
 }
 document.addEventListener('click', e => {
   if (e.target.closest('.modal')) return;
@@ -192,10 +194,12 @@ function afterUnlock(first) {
   nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
   if (first) setTimeout(() => toast('Your gallery is ready. Import something to begin.'), 600);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
 function lockNow() {
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
+  AI.shutdown(); aiProg = null; drawAIChip();
   Store.lock(); idx = null; vaultOpen = false;
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
@@ -208,7 +212,7 @@ function resetIdle() {
   clearTimeout(idleT); if (!idx || !idx.settings.autolock) return;
   idleT = setTimeout(() => { if (!isLocked() && !(curVid && !vid.paused)) { lockNow(); } else resetIdle(); }, (idx.settings.autolockMin || 1) * 60000);
 }
-['pointerdown', 'keydown', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { if (!isLocked()) resetIdle(); }, { passive: true }));
+['pointerdown', 'keydown', 'input', 'wheel', 'touchstart'].forEach(ev => document.addEventListener(ev, () => { if (!isLocked()) resetIdle(); }, { passive: true, capture: true }));
 function privacy(on) { document.body.classList.toggle('privacy', !!(on && idx && idx.settings.hide)); }
 document.addEventListener('visibilitychange', () => {
   privacy(document.hidden);
@@ -375,12 +379,16 @@ function renderCollection() {
 const activeTags = new Set();
 function hl(s, q) { s = esc(s); if (!q) return s; const i = s.toLowerCase().indexOf(q); return i < 0 ? s : s.slice(0, i) + '<mark>' + s.slice(i, i + q.length) + '</mark>' + s.slice(i + q.length); }
 function tagCounts() { const m = new Map(); visible().forEach(i => (i.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1))); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
+function aiTagCounts() { const m = new Map(), mine = new Set(tagCounts()); visible().forEach(i => (i.aiTags || []).forEach(t => { if (!mine.has(t)) m.set(t, (m.get(t) || 0) + 1); })); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
+const hasTag = (i, t) => (i.tags || []).includes(t) || (i.aiTags || []).includes(t);
+let smartTok = 0;
 function renderSearch() {
   const q = $('#q').value.trim().toLowerCase();
   const tags = tagCounts().slice(0, 24);
   const special = [['__fav', 'Favorites', 'star'], ['__photo', 'Photos', 'photo'], ['__video', 'Videos', 'film']];
-  $('#tags').innerHTML = special.concat(tags.map(t => [t, t, 'tag'])).map(([k, l, ic]) => `<button class="tag ${activeTags.has(k) ? 'on' : ''}" data-tag="${esc(k)}">${IC[ic]}${esc(l)}${activeTags.has(k) ? '<span class="x">×</span>' : ''}</button>`).join('') +
-    (tags.length ? '' : '<span style="color:var(--dim);font-size:13px;line-height:38px">Add tags to items (right-click or long-press → Edit) and they’ll appear here.</span>');
+  const aiT = aiTagCounts().slice(0, 16);
+  $('#tags').innerHTML = special.concat(tags.map(t => [t, t, 'tag'])).concat(aiT.map(t => [t, t, 'spark', 'ai'])).map(([k, l, ic, cls]) => `<button class="tag ${cls || ''} ${activeTags.has(k) ? 'on' : ''}" data-tag="${esc(k)}" ${cls ? 'title="AI tag"' : ''}>${IC[ic]}${esc(l)}${activeTags.has(k) ? '<span class="x">×</span>' : ''}</button>`).join('') +
+    (tags.length || aiT.length ? '' : '<span style="color:var(--dim);font-size:13px;line-height:38px">Add tags to items (right-click or long-press → Edit) and they’ll appear here.</span>');
   let sug = [];
   if (q) {
     sug = tags.filter(t => t.includes(q)).slice(0, 3).map(t => ({ k: 'tag', v: t }))
@@ -388,16 +396,31 @@ function renderSearch() {
   } else sug = tags.slice(0, 4).map(t => ({ k: 'tag', v: t }));
   $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}">${s.k === 'tag' ? IC.tag : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span style="color:var(--dim);font-size:13px;line-height:36px">No suggestions yet</span>';
   const res = visible().filter(i => {
-    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ')).toLowerCase();
+    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + (i.aiTags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ')).toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
     for (const t of activeTags) {
       if (t === '__fav') { if (!i.fav) return false; } else if (t === '__photo') { if (i.type !== 'photo') return false; } else if (t === '__video') { if (i.type !== 'video') return false; }
-      else if (!(i.tags || []).includes(t)) return false;
+      else if (!hasTag(i, t)) return false;
     }
     return true;
   });
   $('#resH').textContent = (q || activeTags.size) ? `Results · ${res.length}` : `Everything · ${res.length}`;
   renderGrid($('#results'), sortNew(res), `<div class="empty"><b>No matches</b>Try another word or clear a tag.</div>`);
+  const tok = ++smartTok;
+  if (q.length >= 3 && aiOn() && AI.hasIndex()) {
+    const ids = visible().filter(i => [...activeTags].every(t => t === '__fav' ? i.fav : t === '__photo' ? i.type === 'photo' : t === '__video' ? i.type === 'video' : hasTag(i, t))).map(i => i.id);
+    $('#resH').textContent = `Results · ${res.length} · searching smartly…`;
+    setTimeout(() => { if (tok !== smartTok) return; AI.search(q, ids).then(hits => {
+      if (tok !== smartTok || !idx) return;
+      const seen = new Set(res.map(i => i.id)), rank = new Map(hits.map(([id, sc]) => [id, sc]));
+      const textHits = res.slice().sort((a, b) => (rank.get(b.id) || 0) - (rank.get(a.id) || 0));
+      const extra = hits.filter(([id]) => !seen.has(id)).map(([id]) => itemById(id)).filter(Boolean);
+      const all = textHits.concat(extra);
+      $('#resH').innerHTML = `Results · ${all.length}${extra.length ? ` <span class="ai-pill">${IC.spark}${extra.length} smart match${extra.length > 1 ? 'es' : ''}</span>` : ''}`;
+      renderGrid($('#results'), all, `<div class="empty"><b>No matches</b>Try another word or clear a tag.</div>`);
+      hydrateIcons($('#resH'));
+    }).catch(e => { if (tok === smartTok) { console.warn('smart search', e); $('#resH').textContent = `Results · ${res.length}`; } }); }, 250);
+  }
 }
 let sT; $('#q').addEventListener('input', () => { clearTimeout(sT); sT = setTimeout(renderSearch, 80); });
 $('#qClear').addEventListener('click', e => { e.preventDefault(); $('#q').value = ''; activeTags.clear(); renderSearch(); });
@@ -453,6 +476,7 @@ async function renderProfile() {
       <div class="row"><div class="meta">Vault PIN<small>${s.vaultPin ? 'On: vault asks for a second PIN' : 'Off: vault opens with your passcode session'}</small></div><button class="btn btn-ghost btn-sm" id="vpinBtn">${s.vaultPin ? 'Change / remove' : 'Set PIN'}</button></div>
       <div class="row"><div class="meta">Passcode<small>Re-wraps your key; files aren’t re-encrypted</small></div><button class="btn btn-ghost btn-sm" id="chPass">Change</button></div>
     </div>
+    ${aiCard()}
     <div class="card rows">
       <div class="row">${IC.download}<div class="meta">Back up library<small>One encrypted .velvet file. Move it to another device and restore.</small></div><button class="btn btn-primary btn-sm" id="bkBtn">Export</button></div>
       <div class="row">${IC.upload}<div class="meta">Restore from backup<small>Replaces the library on this device</small></div><button class="btn btn-ghost btn-sm" id="rsBtn">Restore</button></div>
@@ -470,7 +494,7 @@ async function renderProfile() {
   $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
-  $('#regenBtn').onclick = () => regenPreviews(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
+  bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
 async function vaultPinFlow() {
   const s = idx.settings;
@@ -546,7 +570,7 @@ async function importFiles(entries, colId) {
       if (err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message))) { toast('Storage is full, so the import stopped.', 5000); break; }
     }
   }
-  await save(); progress(null); render();
+  await save(); progress(null); render(); if (aiOn() && done) setTimeout(startAI, 800);
   toast(`Added ${done} item${done === 1 ? '' : 's'}${failed ? ` · ${failed} couldn’t be imported` : ''}${skipped ? ` · ${skipped} skipped` : ''}${folderCols.size ? ` · ${folderCols.size} collection${folderCols.size > 1 ? 's' : ''} created from folders` : ''}`, 4000);
 }
 // drag & drop (files and whole folders)
@@ -571,6 +595,86 @@ window.addEventListener('drop', async e => {
 });
 
 /* ---------- item actions ---------- */
+/* ---------- on-device AI glue ---------- */
+const aiOn = () => !!(idx && idx.settings.ai && idx.settings.ai.on);
+let aiProg = null;
+function drawAIChip() {
+  let el = $('#aiChip'); if (!el) { el = document.createElement('button'); el.id = 'aiChip'; el.className = 'ai-chip'; el.onclick = () => nav('profile'); document.body.appendChild(el); }
+  const p = aiProg; const show = p && (p.phase === 'indexing' || p.phase === 'loading' || p.phase === 'paused') && idx;
+  el.classList.toggle('show', !!show); if (!show) return;
+  el.innerHTML = `${IC.spark}<span>${p.phase === 'loading' ? 'Loading on-device AI…' : p.phase === 'paused' ? 'AI paused' : `AI indexing ${p.done}/${p.total}`}</span>`;
+}
+function aiStatusText() {
+  if (!idx) return ''; const st = AI.stats(idx), p = aiProg;
+  if (p && p.phase === 'loading') return 'Loading the on-device model…';
+  if (p && p.phase === 'indexing') return `Indexing ${p.done} of ${p.total}${p.msPer ? ` · ${(p.msPer / 1000).toFixed(1)} s/item` : ''}${p.device ? ' · ' + p.device.toUpperCase() : ''}`;
+  if (p && p.phase === 'paused') return `Paused while Velvet is in the background (${p.done} of ${p.total})`;
+  return `${st.indexed} of ${st.total} indexed${p && p.phase === 'done' && p.device ? ' · ' + p.device.toUpperCase() : ''}`;
+}
+async function startAI() {
+  if (!aiOn() || AI.isRunning() || !Store.isUnlocked()) return;
+  const thumbBlob = async it => it.thumb ? Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg') : null;
+  const fileBlob = async it => new File([await Store.readFile(it.id, it.chunks, it.mime)], it.name || it.title, { type: it.mime });
+  try {
+    await AI.indexLibrary({ idx, thumbBlob, fileBlob, maxVideoBytes: isIOS ? 150 * 1024 ** 2 : 1024 ** 3,
+      onProgress: p => { aiProg = p; drawAIChip(); const s = $('#aiStatus'); if (s) s.textContent = aiStatusText(); },
+      onItem: () => { } });
+  } catch (e) { console.warn('AI indexing', e); aiProg = { phase: 'error' }; drawAIChip(); toast('On-device AI couldn’t start: ' + (e.message || e)); }
+  if (idx && (view === 'search' || view === 'profile' || view === 'library')) render();
+}
+function aiCard() {
+  const on = aiOn(), st = AI.stats(idx);
+  return `<div class="card rows" id="aiCard">
+    <div class="row">${IC.spark}<div class="meta">On-device AI<small>Smart search, auto-tags and duplicate finder. Runs only on this device. Nothing is uploaded.</small></div><button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button></div>
+    ${on ? `<div class="row"><div class="meta">Index library<small id="aiStatus">${aiStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button></div>
+    <div class="row"><div class="meta">Duplicates &amp; similar<small>Review look-alikes side by side and keep the best</small></div><button class="btn btn-ghost btn-sm" id="aiDup">Review</button></div>
+    <div class="row"><div class="meta">AI data<small>Encrypted on this device. AI model ≈ ${AI.MODEL_MB} MB, downloaded once and works offline.</small></div><span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe" style="margin-left:8px">Remove</button></div>` : ''}
+  </div>`;
+}
+function bindAICard() {
+  const sw = $('#aiSw'); if (!sw) return;
+  sw.onclick = async () => {
+    const s = idx.settings; s.ai = s.ai || {};
+    if (!s.ai.on) {
+      if (!(await confirmBox('Turn on on-device AI?', (host ? `Velvet will use its built-in AI model (about ${AI.MODEL_MB} MB, included with the app). ` : `Velvet will download its AI model (about ${AI.MODEL_MB} MB) once from this app’s own site, then work offline. `) + `Your photos are analysed only on this device. Nothing is uploaded, ever. Indexing runs in the background and pauses when Velvet is hidden.`, 'Turn on'))) return;
+      s.ai.on = true; await save(); await AI.open(idx); renderProfile(); startAI();
+    } else { s.ai.on = false; AI.stop(); await save(); renderProfile(); render(); }
+  };
+  const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
+  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes');
+  const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
+}
+/* ---------- duplicates & similar ---------- */
+let dupState = null;
+$('#dupBack').onclick = () => nav('profile');
+async function renderDupes() {
+  const body = $('#dupesBody'); if (!body) return;
+  if (!aiOn()) { body.innerHTML = `<div class="empty"><b>On-device AI is off</b>Turn it on in Profile to find duplicates.</div>`; return; }
+  await AI.open(idx);
+  const st = AI.stats(idx);
+  body.innerHTML = `<div class="section-title"><h2>Duplicates &amp; similar</h2><span>${st.indexed} of ${st.total} indexed</span></div><div class="lb-loading" style="margin:40px auto"></div>`;
+  const g = await AI.findGroups(visible());
+  if (view !== 'dupes') return;
+  const keepOf = ids => ids.slice().sort((a, b) => AI.quality(itemById(b)) - AI.quality(itemById(a)))[0];
+  dupState = { picks: new Map() };
+  const card = (ids, kind, gi) => { const keep = keepOf(ids), dup = kind === 'd'; return `<div class="dgroup" data-g="${kind}${gi}">
+      <div class="dgh"><b>${dup ? 'Duplicates' : 'Similar'} · ${ids.length}</b><span>${dup ? 'Velvet pre-selected the best one to keep (highest resolution and quality).' : 'These look alike but may be different shots. Nothing is selected — tick the ones you want to delete.'}</span></div>
+      <div class="drow">${ids.map(id => { const it = itemById(id); const k = !dup || id === keep; return `<label class="dtile ${k ? 'keep' : ''}" data-id="${id}"><input type="checkbox" ${k ? '' : 'checked'} data-del="${id}"><div class="dimg" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))}"><img data-tid="${id}" alt=""></div><small>${esc(it.title)}<br>${it.w ? it.w + '×' + it.h + ' · ' : ''}${bytes(it.size)}</small><span class="kb">${k ? 'Keep' : 'Delete'}</span></label>`; }).join('')}</div>
+      <div class="dact"><button class="btn btn-danger btn-sm" data-delg="${kind}${gi}">${IC.trash}Delete selected</button></div></div>`; };
+  body.innerHTML = `<div class="section-title"><h2>Duplicates &amp; similar</h2><span>${st.indexed} of ${st.total} indexed</span></div>
+    ${st.indexed < st.total ? `<p class="sub-note">Still indexing (${st.total - st.indexed} to go). More groups may appear.</p>` : ''}
+    ${g.dupes.length ? `<h3 class="dsec">Duplicates</h3>` + g.dupes.map((ids, i) => card(ids, 'd', i)).join('') : ''}
+    ${g.similar.length ? `<h3 class="dsec">Similar</h3>` + g.similar.map((ids, i) => card(ids, 's', i)).join('') : ''}
+    ${!g.dupes.length && !g.similar.length ? `<div class="empty"><b>No duplicates found</b>Nothing in your library looks the same.</div>` : ''}`;
+  hydrateCovers(body); hydrateIcons(body);
+  body.querySelectorAll('input[data-del]').forEach(cb => cb.onchange = () => { const t = cb.closest('.dtile'); t.classList.toggle('keep', !cb.checked); t.querySelector('.kb').textContent = cb.checked ? 'Delete' : 'Keep'; });
+  body.querySelectorAll('[data-delg]').forEach(b => b.onclick = async () => {
+    const grp = b.closest('.dgroup'), ids = [...grp.querySelectorAll('input[data-del]:checked')].map(x => x.dataset.del), all = grp.querySelectorAll('input[data-del]').length;
+    if (!ids.length) { toast('Nothing selected to delete'); return; }
+    if (ids.length === all && !(await confirmBox('Delete every copy?', 'You selected all items in this group, so nothing will be kept.', 'Continue', true))) return;
+    if (await deleteItems(ids)) nav('dupes', { keepScroll: true });
+  });
+}
 async function replaceThumb(it, blob) {
   if (it.thumb) await Store.deleteFile(it.thumb.id);
   const tid = it.id + '_t', tr = await Store.putFile(tid, blob); it.thumb = { id: tid, chunks: tr.chunks, stored: tr.stored };
@@ -632,6 +736,7 @@ async function deleteItems(ids) {
     if (thumbs.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); } if (fulls.has(id)) { URL.revokeObjectURL(fulls.get(id)); fulls.delete(id); }
     idx.items = idx.items.filter(x => x.id !== id); idx.collections.forEach(c => { if (c.cover === id) c.cover = null; });
   }
+  AI.forget(ids); if (aiOn()) await AI.persist(idx).catch(() => { });
   await save(); render(); toast(`Deleted ${n} item${n === 1 ? '' : 's'}`); return true;
 }
 function setVault(ids, on) { ids.forEach(id => { const it = itemById(id); if (it) it.vault = on; }); save(); render(); toast(on ? `Moved ${ids.length} to the Vault` : `Moved ${ids.length} back to the Library`); }
@@ -648,10 +753,11 @@ async function addToCollections(ids) {
 }
 async function itemSheet(it) {
   if (!it) return;
-  const tags = (it.tags || []).slice();
+  const tags = (it.tags || []).slice(), aiT = (it.aiTags || []).slice(), aiRej = (it.aiRej || []).slice();
   const res = await modal(`<h3>Details</h3><div class="meta-line">${it.type === 'video' ? 'Video' : 'Photo'} · ${bytes(it.size)}${it.w ? ` · ${it.w}×${it.h}` : ''}${it.dur ? ' · ' + fmt(it.dur) : ''} · added ${new Date(it.added).toLocaleDateString()}</div>
     <span class="lbl">Title</span><input class="field" id="tTitle" value="${esc(it.title)}" maxlength="80">
     <span class="lbl">Tags</span><div class="taged" id="tTags"></div>
+    ${(it.aiTags || []).length ? `<span class="lbl">AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· suggested on this device. Tap ✓ to keep or × to remove</small></span><div class="taged ai" id="tAI"></div>` : ''}
     <span class="lbl">Collections</span><div class="clist">${idx.collections.map(c => `<label><input type="checkbox" value="${c.id}" ${it.cols.includes(c.id) ? 'checked' : ''}>${esc(c.name)}${c.cover === it.id ? ' <small style="color:var(--mag2)">· cover</small>' : ''}</label>`).join('') || '<span style="color:var(--dim);font-size:13px">No collections yet. Create one in Collections.</span>'}</div>
     <div class="menu" style="margin-top:14px">
       <button data-a="fav">${IC.heart}${it.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
@@ -664,12 +770,17 @@ async function itemSheet(it) {
     const draw = () => { box.innerHTML = tags.map((t, i) => `<span class="tag on">${esc(t)}<button data-x="${i}" aria-label="Remove">×</button></span>`).join('') + `<input id="tIn" placeholder="Add a tag and press Enter" autocomplete="off">`; const inp = box.querySelector('#tIn');
       inp.onkeydown = e => { if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) { e.preventDefault(); const v = inp.value.trim().toLowerCase().slice(0, 30); if (!tags.includes(v)) tags.push(v); draw(); box.querySelector('#tIn').focus(); } else if (e.key === 'Backspace' && !inp.value && tags.length) { tags.pop(); draw(); box.querySelector('#tIn').focus(); } }; };
     draw(); box.addEventListener('click', e => { const x = e.target.closest('[data-x]'); if (x) { tags.splice(+x.dataset.x, 1); draw(); } });
+    const aiBox = m.querySelector('#tAI');
+    const drawAI = () => { if (!aiBox) return; aiBox.innerHTML = aiT.map((t, i) => `<span class="tag ai">${IC.spark}${esc(t)}<button data-aiok="${i}" aria-label="Keep tag">✓</button><button data-aino="${i}" aria-label="Remove tag">×</button></span>`).join('') || '<span style="color:var(--dim);font-size:13px">No AI suggestions left</span>'; };
+    drawAI(); if (aiBox) aiBox.addEventListener('click', e => { const ok = e.target.closest("[data-aiok]"), no = e.target.closest("[data-aino]");
+      if (ok) { const t = aiT.splice(+ok.dataset.aiok, 1)[0]; if (!tags.includes(t)) tags.push(t); draw(); drawAI(); }
+      if (no) { const t = aiT.splice(+no.dataset.aino, 1)[0]; aiRej.push(t); drawAI(); } });
     const collect = () => { const inp = box.querySelector('#tIn'); if (inp && inp.value.trim()) { const v = inp.value.trim().toLowerCase(); if (!tags.includes(v)) tags.push(v); } return { title: m.querySelector('#tTitle').value.trim() || it.title, cols: Array.from(m.querySelectorAll('.clist input:checked')).map(i => i.value) }; };
     m.querySelector('[data-ok]').onclick = () => close({ a: 'done', ...collect() });
     m.querySelectorAll('[data-a]').forEach(b => b.onclick = () => close({ a: b.dataset.a, ...collect() }));
   });
   if (!res) return;
-  it.title = res.title; it.tags = tags; it.cols = res.cols; await save();
+  it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)); it.aiRej = aiRej; } await save();
   if (res.a === 'fav') toggleFav(it);
   else if (res.a === 'cover') { it.cols.forEach(cid => { const c = colById(cid); if (c) c.cover = it.id; }); await save(); toast('Cover updated'); }
   else if (res.a === 'vault') { closeLightbox(); closePlayer(); setVault([it.id], !it.vault); return; }
@@ -797,6 +908,7 @@ function wake() { pl.classList.remove('idle'); clearTimeout(hideT); hideT = setT
 /* ---------- backup / restore ---------- */
 async function exportBackup() {
   const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); });
+  const aif = idx.settings.ai && idx.settings.ai.file; if (aif) files.push({ id: aif.id, n: aif.chunks });
   const total = idx.items.reduce((a, i) => a + (i.stored || 0) + ((i.thumb && i.thumb.stored) || 0), 0);
   const name = `velvet-backup-${new Date().toISOString().slice(0, 10)}.velvet`;
   if (!(await confirmBox('Export encrypted backup', `This creates <b>${esc(name)}</b> (about ${bytes(total)}). It’s encrypted with your current passcode, so you’ll need that passcode to restore it on any device.`, 'Export'))) return;
@@ -828,7 +940,7 @@ $('#restoreFile').addEventListener('change', async e => {
   try {
     const ok = await Store.restoreBackup(f, pass, p => progress('Restoring backup', p)); progress(null);
     if (!ok) { toast('Wrong passcode for this backup.', 4000); if (!had) gateSetup(); return; }
-    for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear(); fulls.clear();
+    for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear(); fulls.clear(); await AI.shutdown();
     idx = await Store.loadIndex(); afterUnlock(false); toast('Backup restored', 3500);
   } catch (err) { progress(null); toast('Restore failed: ' + err.message, 6000); if (!(await Store.isSetUp())) gateSetup(); }
 });
@@ -854,4 +966,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
 })();
-window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs };
+window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI };
