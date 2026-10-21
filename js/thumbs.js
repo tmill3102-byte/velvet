@@ -111,7 +111,7 @@ export async function probeMp4(file) {
     const fourcc = (v, o) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3));
     const kids = (s, e) => { const r = []; let o = s; while (o + 8 <= e) { const sz = moov.getUint32(o); if (sz < 8 || o + sz > e) break; r.push({ t: fourcc(moov, o + 4), s: o + 8, e: o + sz }); o += sz; } return r; };
     for (const b of kids(8, moov.byteLength)) {
-      if (b.t === 'mvhd') { const v1 = moov.getUint8(b.s) === 1; const ts = moov.getUint32(b.s + (v1 ? 20 : 12)); const du = v1 ? Number(moov.getBigUint64(b.s + 24)) : moov.getUint32(b.s + 16); if (ts) out.dur = du / ts; }
+      if (b.t === 'mvhd') { const v1 = moov.getUint8(b.s) === 1; const ct = v1 ? Number(moov.getBigUint64(b.s + 4)) : moov.getUint32(b.s + 4); if (ct > 2082844800 + 315532800) out.created = (ct - 2082844800) * 1000; const ts = moov.getUint32(b.s + (v1 ? 20 : 12)); const du = v1 ? Number(moov.getBigUint64(b.s + 24)) : moov.getUint32(b.s + 16); if (ts) out.dur = du / ts; }
       if (b.t !== 'trak') continue;
       const tk = kids(b.s, b.e); const tkhd = tk.find(x => x.t === 'tkhd'), mdia = tk.find(x => x.t === 'mdia'); if (!tkhd || !mdia) continue;
       const md = kids(mdia.s, mdia.e), hdlr = md.find(x => x.t === 'hdlr'); if (!hdlr || fourcc(moov, hdlr.s + 8) !== 'vide') continue;

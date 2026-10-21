@@ -139,6 +139,24 @@ export async function search(q, ids) {
   return out.filter(x => x[1] >= thr).slice(0, 200);
 }
 
+
+/* ---------- helpers for smart albums / best shots / rules (batch 2) ---------- */
+export const entryOf = id => (data && data.items[id]) || null;
+export function itemVec(id) { const l = vecs.get(id); return l && l.length ? meanVec(l) : null; }
+export const dot = (a, b) => { let s = 0; for (let i = 0; i < 512; i++) s += a[i] * b[i]; return s; };
+export async function vocabInfo() { await loadVocab(); return vocab; }
+export function tagVec(tag) { if (!vocab) return null; const i = vocab.tags.findIndex(t => t[0] === tag); return i < 0 ? null : vocab.E.subarray(i * 512, i * 512 + 512); }
+/* per-item absolute match for rules: query must score like one of the image's top tags (same test as auto-tags) */
+export async function matchQuery(q, ids, { minSim = .17, minZ = 2 } = {}) {
+  if (!vecs.size) return []; await loadVocab(); const t = await embedText(q), { E, tags } = vocab, N = tags.length, out = [];
+  for (const id of ids) {
+    const v = itemVec(id); if (!v) continue; const sq = dot(t, v); if (sq < minSim) continue;
+    let m = 0, m2 = 0; for (let i = 0; i < N; i++) { let d = 0; for (let j = 0; j < 512; j++) d += v[j] * E[i * 512 + j]; m += d; m2 += d * d; }
+    m /= N; const sd = Math.sqrt(Math.max(1e-6, m2 / N - m * m)); if ((sq - m) / sd >= minZ) out.push([id, sq]);
+  }
+  return out.sort((a, b) => b[1] - a[1]);
+}
+
 /* ---------- duplicates & similar ---------- */
 /* returns { dupes: [[id...]], similar: [[id...]] }; yields to keep the UI responsive */
 export async function findGroups(items, { onProgress } = {}) {

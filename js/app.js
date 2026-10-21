@@ -1,6 +1,8 @@
 import * as Store from './store.js';
 import * as Thumbs from './thumbs.js';
 import * as AI from './ai.js';
+import * as Vision from './vision.js';
+import * as Smart from './smart.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -94,7 +96,7 @@ let view = 'library', curCol = null, libFilter = 'all', vaultOpen = false;
 const thumbs = new Map();  // itemId -> object URL of decrypted thumbnail
 const fulls = new Map();   // itemId -> object URL of decrypted original (small LRU)
 const save = () => Store.saveIndex(idx);
-const visible = () => idx.items.filter(i => !i.vault);
+const visible = () => idx.items.filter(i => !i.vault && !i.archived);
 const itemById = id => idx.items.find(i => i.id === id);
 const colById = id => idx.collections.find(c => c.id === id);
 
@@ -124,6 +126,9 @@ function render() {
   else if (view === 'vault') renderVault();
   else if (view === 'profile') renderProfile();
   else if (view === 'dupes') renderDupes();
+  else if (view === 'best') renderBest();
+  else if (view === 'archive') renderArchive();
+  else if (view === 'rules') renderRules();
 }
 document.addEventListener('click', e => {
   if (e.target.closest('.modal')) return;
@@ -196,14 +201,14 @@ function afterUnlock(first) {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
-function lockNow() {
+function lockNow() { if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
   AI.shutdown(); aiProg = null; drawAIChip();
   Store.lock(); idx = null; vaultOpen = false;
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
-  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage'].forEach(s => { $(s).innerHTML = ''; });
+  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#dupesBody'].forEach(s => { $(s).innerHTML = ''; });
   app.classList.add('locked'); app.setAttribute('aria-hidden', 'true'); lockEl.classList.add('open');
   gateUnlock();
 }
@@ -342,7 +347,7 @@ function renderCollections() {
      <div class="cmenu"><button class="iconbtn" data-cm="${c.id}" aria-label="Collection options">${IC.more}</button></div>
      <div class="info"><div><h3>${esc(c.name)}</h3><p>${colItems(c).length} items</p></div><span class="lockchip">${IC.lock}</span></div></div>`).join('') +
     `<button class="col-card col-new" id="newCol" style="--i:${idx.collections.length}">${IC.plus}New collection</button>`;
-  hydrateCovers($('#colGrid'));
+  hydrateCovers($('#colGrid')); renderSmartAlbums();
   $('#newCol').onclick = () => newCollection();
   $$('[data-cm]').forEach(b => b.onclick = e => { e.stopPropagation(); collectionMenu(colById(b.dataset.cm)); });
 }
@@ -365,6 +370,7 @@ async function collectionMenu(c) {
 }
 function openCollection(id) { curCol = id; nav('collection'); }
 function renderCollection() {
+  if (isSmart(curCol)) { renderSmartCollection(); return; }
   const c = colById(curCol); if (!c) { nav('collections'); return; }
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(c.id));
   h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
@@ -438,7 +444,7 @@ function renderVault() {
     };
     $('#vGo').onclick = go; $('#vpin').onkeydown = e => { if (e.key === 'Enter') go(); }; return;
   }
-  const items = sortNew(idx.items.filter(i => i.vault));
+  const items = sortNew(idx.items.filter(i => i.vault && !i.archived));
   body.innerHTML = `<div class="toolrow" style="justify-content:center"><div class="tools"><button class="btn btn-ghost btn-sm" id="vReveal">${IC.eye}<span>Reveal all</span></button><button class="btn btn-ghost btn-sm" data-act="select">${IC.check}<span>Select</span></button>${pin ? `<button class="btn btn-ghost btn-sm" id="vClose">${IC.lock}<span>Close vault</span></button>` : ''}</div></div>
     <div class="grid" id="vaultGrid"></div><div class="pill">${IC.lock}Encrypted on device</div>
     <p class="demo-note" style="text-align:center">Vault items are hidden from Library, Collections and Search. Tap once to reveal, again to open.${pin ? '' : ' Add a separate vault PIN in Profile for a second layer.'}</p>`;
@@ -556,7 +562,7 @@ async function importFiles(entries, colId) {
       let thumb = null;
       if (th && th.blob) { const tr = await Store.putFile(id + '_t', th.blob); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
       const it = { id, type, title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Untitled', name: f.name, ext: extOf(f.name), mime, size: f.size, chunks: res.chunks, stored: res.stored,
-        added: Date.now() + done, modified: f.lastModified || null, tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h, codec: th && th.codec || '', thumbT: th && th.t != null ? th.t : null };
+        added: Date.now() + done, modified: f.lastModified || null, taken: await Vision.captureDate(f, mime), tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h, codec: th && th.codec || '', thumbT: th && th.t != null ? th.t : null };
       if (colId && colById(colId)) it.cols.push(colId);
       if (e.folder) {
         let c = folderCols.get(e.folder) || idx.collections.find(x => x.name === e.folder);
@@ -620,7 +626,8 @@ async function startAI() {
       onProgress: p => { aiProg = p; drawAIChip(); const s = $('#aiStatus'); if (s) s.textContent = aiStatusText(); },
       onItem: () => { } });
   } catch (e) { console.warn('AI indexing', e); aiProg = { phase: 'error' }; drawAIChip(); toast('On-device AI couldn’t start: ' + (e.message || e)); }
-  if (idx && (view === 'search' || view === 'profile' || view === 'library')) render();
+  if (idx && Store.isUnlocked()) { smartCache = null; await applyRules().catch(e => console.warn('rules', e)); }
+  if (idx && (view === 'search' || view === 'profile' || view === 'library' || view === 'collections')) render();
 }
 function aiCard() {
   const on = aiOn(), st = AI.stats(idx);
@@ -628,7 +635,10 @@ function aiCard() {
     <div class="row">${IC.spark}<div class="meta">On-device AI<small>Smart search, auto-tags and duplicate finder. Runs only on this device. Nothing is uploaded.</small></div><button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button></div>
     ${on ? `<div class="row"><div class="meta">Index library<small id="aiStatus">${aiStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button></div>
     <div class="row"><div class="meta">Duplicates &amp; similar<small>Review look-alikes side by side and keep the best</small></div><button class="btn btn-ghost btn-sm" id="aiDup">Review</button></div>
+    <div class="row"><div class="meta">Best shots<small>Pick the best of bursts and look-alikes, archive the rest</small></div><button class="btn btn-ghost btn-sm" id="aiBest">Review</button></div>
+    <div class="row"><div class="meta">Smart rules<small>${(idx.settings.rules || []).length ? (idx.settings.rules || []).filter(r => r.on).length + ' active · auto-move items by tag or AI search' : 'Auto-move items by tag or AI search into the Vault or a collection'}</small></div><button class="btn btn-ghost btn-sm" id="aiRules">Manage</button></div>
     <div class="row"><div class="meta">AI data<small>Encrypted on this device. AI model ≈ ${AI.MODEL_MB} MB, downloaded once and works offline.</small></div><span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe" style="margin-left:8px">Remove</button></div>` : ''}
+    ${idx.items.some(i => i.archived) ? `<div class="row"><div class="meta">Archive<small>Hidden extras kept encrypted on this device</small></div><span class="v">${idx.items.filter(i => i.archived).length}</span><button class="btn btn-ghost btn-sm" id="aiArch" style="margin-left:8px">Open</button></div>` : ''}
   </div>`;
 }
 function bindAICard() {
@@ -641,7 +651,7 @@ function bindAICard() {
     } else { s.ai.on = false; AI.stop(); await save(); renderProfile(); render(); }
   };
   const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
-  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes');
+  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
   const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
 }
 /* ---------- duplicates & similar ---------- */
@@ -780,7 +790,7 @@ async function itemSheet(it) {
     m.querySelectorAll('[data-a]').forEach(b => b.onclick = () => close({ a: b.dataset.a, ...collect() }));
   });
   if (!res) return;
-  it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)); it.aiRej = aiRej; } await save();
+  it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)); it.aiRej = aiRej; } await save(); applyRules({ ids: [it.id] });
   if (res.a === 'fav') toggleFav(it);
   else if (res.a === 'cover') { it.cols.forEach(cid => { const c = colById(cid); if (c) c.cover = it.id; }); await save(); toast('Cover updated'); }
   else if (res.a === 'vault') { closeLightbox(); closePlayer(); setVault([it.id], !it.vault); return; }
@@ -799,7 +809,7 @@ function drawSelbar() {
   const b = $('#selbar'), n = sel.size, ids = [...sel];
   b.innerHTML = `<span class="count">${n} selected</span><button data-s="all">${IC.check}All</button>
     <button data-s="fav">${IC.heart}Favorite</button><button data-s="col">${IC.cols}Add to collection</button>
-    ${view === 'collection' ? `<button data-s="uncol">${IC.minus}Remove from collection</button>` : ''}
+    ${view === 'collection' && !isSmart(curCol) ? `<button data-s="uncol">${IC.minus}Remove from collection</button>` : ''}
     ${view === 'vault' ? `<button data-s="unvault">${IC.vault}Back to Library</button>` : `<button data-s="vault">${IC.vault}Move to Vault</button>`}
     <button data-s="del" class="danger">${IC.trash}Delete</button><button data-s="x">${IC.close}</button>`;
   b.classList.add('show');
@@ -905,6 +915,148 @@ prog.addEventListener('pointerup', endDrag); prog.addEventListener('pointercance
 function wake() { pl.classList.remove('idle'); clearTimeout(hideT); hideT = setTimeout(() => { if (!vid.paused && !dragging && pl.classList.contains('open')) pl.classList.add('idle'); }, 2500); }
 ['pointermove', 'pointerdown', 'touchstart'].forEach(ev => pl.addEventListener(ev, wake, { passive: true }));
 
+/* ---------- smart albums, best shots, archive, smart rules (v1.2) ---------- */
+let smartCache = null;
+const isSmart = id => typeof id === 'string' && id.startsWith('smart:');
+const smartKey = () => [idx.items.length, AI.stats(idx).indexed, idx.items.reduce((a, i) => a + (i.aiTags || []).length * 3 + (i.tags || []).length * 7 + (i.vault ? 11 : 0) + (i.archived ? 13 : 0), 0)].join(':');
+async function getSmart(force) {
+  if (!aiOn()) return [];
+  await AI.open(idx); const k = smartKey();
+  if (!force && smartCache && smartCache.key === k) return smartCache.albums;
+  const albums = await Smart.smartAlbums(visible()); smartCache = { key: k, albums }; return albums;
+}
+const smartById = id => smartCache && smartCache.albums.find(a => a.id === id);
+const KINDL = { place: 'Places', theme: 'Themes', moment: 'Moments' };
+const smartCover = a => a.ids.map(itemById).filter(Boolean).sort((x, y) => AI.quality(y) - AI.quality(x))[0];
+async function renderSmartAlbums() {
+  const el = $('#smartAlbums'); if (!el) return;
+  if (!aiOn()) { el.innerHTML = ''; return; }
+  const al = await getSmart(); if (view !== 'collections') return;
+  if (!al.length) { el.innerHTML = `<div class="smart-empty">${IC.spark}<span>Smart albums appear here once on-device AI has indexed a few photos.</span></div>`; return; }
+  el.innerHTML = Object.entries(KINDL).map(([k, l]) => { const xs = al.filter(a => a.kind === k); if (!xs.length) return '';
+    return `<div class="sub-h smart-h">${IC.spark}${l}</div><div class="smart-row">${xs.map((a, i) => { const cv = smartCover(a);
+      return `<div class="col-card smart" data-smart="${esc(a.id)}" style="--fb:${fbFor(a.id)};--i:${i}" role="button" tabindex="0">${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="gloss"></div>
+        <span class="auto-chip">${IC.spark}Auto</span><div class="info"><div><h3>${esc(a.name)}</h3><p>${a.ids.length} items${a.sub ? ' · ' + esc(a.sub) : ''}</p></div></div></div>`; }).join('')}</div>`; }).join('') +
+    `<div class="sub-h smart-h mine">Your collections</div>`;
+  hydrateCovers(el);
+  el.querySelectorAll('[data-smart]').forEach(c => c.onclick = () => openCollection(c.dataset.smart));
+}
+async function renderSmartCollection() {
+  await getSmart(); const a = smartById(curCol); if (!a) { nav('collections'); return; }
+  const items = a.ids.map(itemById).filter(i => i && !i.vault && !i.archived), cv = smartCover(a);
+  const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
+  h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
+    <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
+    <div class="hero-actions"><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
+  hydrateCovers(h);
+  $('#smSave').onclick = async () => {
+    const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
+    const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
+    items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await save(); toast(`Saved “${c.name}”`); openCollection(c.id);
+  };
+  const list = a.kind === 'moment' ? items.slice().sort((x, y) => Smart.timeOf(x) - Smart.timeOf(y)) : sortNew(items);
+  renderGrid($('#colItems'), list, `<div class="empty"><b>Nothing here right now</b>Smart albums update as your library changes.</div>`);
+}
+
+function archiveItems(ids, on = true) {
+  ids.forEach(id => { const it = itemById(id); if (!it) return; if (on) it.archived = Date.now(); else delete it.archived; });
+  return save().then(() => toast(on ? `Archived ${ids.length} item${ids.length === 1 ? '' : 's'}. Find them in Profile → Archive.` : `Restored ${ids.length} item${ids.length === 1 ? '' : 's'}`));
+}
+const qLabel = (r, top) => r.q >= top - .8 ? 'Sharp' : r.q >= top - 2 ? 'Softer' : 'Blurry or dark';
+async function renderBest() {
+  const body = $('#bestBody'); if (!body) return;
+  if (!aiOn()) { body.innerHTML = `<div class="empty"><b>On-device AI is off</b>Turn it on in Profile to find your best shots.</div>`; return; }
+  await AI.open(idx); const st = AI.stats(idx);
+  body.innerHTML = `<div class="section-title"><h2>Best shots</h2><span>${st.indexed} of ${st.total} indexed</span></div><div class="lb-loading" style="margin:40px auto"></div>`;
+  const groups = await Smart.bestShots(visible()); if (view !== 'best') return;
+  const extras = groups.reduce((a, g) => a + g.ids.length - 1, 0);
+  body.innerHTML = `<div class="section-title"><h2>Best shots</h2><span>${groups.length} set${groups.length === 1 ? '' : 's'}</span></div>
+    <p class="sub-note">Bursts and look-alike photos, grouped on this device. Velvet picks the sharpest, best-exposed, most typical shot. Archived extras are hidden but kept encrypted until you delete them.</p>
+    ${groups.length > 1 ? `<div class="dact top"><button class="btn btn-primary btn-sm" id="bestAll">${IC.check}Keep best in all sets · archive ${extras}</button></div>` : ''}
+    ${groups.map((g, gi) => `<div class="dgroup bgroup" data-bg="${gi}"><div class="dgh"><b>${g.ids.length} similar shots</b><span>Best pick is highlighted. Untick anything you want to keep too.</span></div>
+      <div class="drow">${g.rows.map(r => { const it = itemById(r.id), b = r.id === g.best;
+        return `<label class="dtile ${b ? 'keep best' : ''}" data-id="${r.id}"><input type="checkbox" ${b ? '' : 'checked'} data-arch="${r.id}"><div class="dimg" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))}"><img data-tid="${r.id}" alt=""></div><small>${esc(it.title)}<br>${qLabel(r, Math.max(...g.rows.map(x => x.q)))} · ${it.w ? it.w + '×' + it.h : ''}</small><span class="kb">${b ? '★ Best' : 'Archive'}</span></label>`; }).join('')}</div>
+      <div class="dact"><button class="btn btn-primary btn-sm" data-keepbest="${gi}">${IC.check}Keep best, archive rest</button></div></div>`).join('')}
+    ${!groups.length ? `<div class="empty"><b>No bursts or look-alikes</b>When you have several similar shots, they’ll show up here.</div>` : ''}`;
+  hydrateCovers(body); hydrateIcons(body);
+  body.querySelectorAll('input[data-arch]').forEach(cb => cb.onchange = () => { const t = cb.closest('.dtile'); t.classList.toggle('keep', !cb.checked); t.querySelector('.kb').textContent = cb.checked ? 'Archive' : (t.classList.contains('best') ? '★ Best' : 'Keep'); });
+  const run = async grps => { const ids = grps.flatMap(g => [...g.querySelectorAll('input[data-arch]:checked')].map(x => x.dataset.arch)); if (!ids.length) { toast('Nothing selected to archive'); return; } await archiveItems(ids); nav('best', { keepScroll: true }); };
+  body.querySelectorAll('[data-keepbest]').forEach(b => b.onclick = () => run([b.closest('.dgroup')]));
+  const all = $('#bestAll'); if (all) all.onclick = async () => { if (await confirmBox('Archive all extras?', `Keeps the best shot in each of ${groups.length} sets and archives ${extras} others. You can restore them any time from Profile → Archive.`, 'Archive')) run([...body.querySelectorAll('.bgroup')]); };
+}
+function renderArchive() {
+  const body = $('#archBody'); if (!body) return;
+  const items = idx.items.filter(i => i.archived).sort((a, b) => b.archived - a.archived);
+  body.innerHTML = `<div class="section-title"><h2>Archive</h2><span>${items.length} item${items.length === 1 ? '' : 's'}</span></div>
+    <p class="sub-note">Archived items are hidden from Library, Collections, Search and smart albums. They stay encrypted on this device until you delete them.</p>
+    ${items.length ? `<div class="dact top"><button class="btn btn-ghost btn-sm" id="archSelAll">${IC.check}Select all</button><button class="btn btn-primary btn-sm" id="archRestore">Restore selected</button><button class="btn btn-danger btn-sm" id="archDel">${IC.trash}Delete selected</button></div>
+      <div class="drow arch">${items.map(it => `<label class="dtile" data-id="${it.id}"><input type="checkbox" data-a="${it.id}"><div class="dimg" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))}"><img data-tid="${it.id}" alt=""></div><small>${esc(it.title)}<br>archived ${new Date(it.archived).toLocaleDateString()}</small></label>`).join('')}</div>`
+      : `<div class="empty"><b>Archive is empty</b>Use Best shots to tidy up bursts and look-alikes.</div>`}`;
+  hydrateCovers(body); hydrateIcons(body);
+  const picked = () => [...body.querySelectorAll('input[data-a]:checked')].map(x => x.dataset.a);
+  const sa = $('#archSelAll'); if (sa) sa.onclick = () => { const cbs = [...body.querySelectorAll('input[data-a]')], on = cbs.some(c => !c.checked); cbs.forEach(c => c.checked = on); };
+  const rs = $('#archRestore'); if (rs) rs.onclick = async () => { const ids = picked(); if (!ids.length) return toast('Select items to restore'); await archiveItems(ids, false); renderArchive(); };
+  const dl = $('#archDel'); if (dl) dl.onclick = async () => { const ids = picked(); if (!ids.length) return toast('Select items to delete'); if (await deleteItems(ids)) renderArchive(); };
+}
+
+/* smart rules: run on this device after indexing/tag edits; each rule handles an item once (so manual moves stick) */
+const rulesOf = () => (idx.settings.rules = idx.settings.rules || []);
+const ruleSeen = new Map();   // in-memory only; cleared on lock
+async function applyRules({ ids = null, only = null, quiet = false } = {}) {
+  const rules = rulesOf().filter(r => r.on && (!only || only.includes(r.id))); if (!rules.length) return 0;
+  if (aiOn()) await AI.open(idx).catch(() => { });
+  let pool = idx.items.filter(i => !i.archived); if (ids) pool = pool.filter(i => ids.includes(i.id));
+  let total = 0; const msgs = [];
+  for (const r of rules) {
+    if (r.action === 'col' && !colById(r.col)) continue;
+    // AI-search rules: within a session only look at indexed items this rule hasn't checked yet (avoids re-scanning on every run)
+    let cand = pool;
+    if (r.kind === 'search') { const seen = ruleSeen.get(r.id) || new Set(); ruleSeen.set(r.id, seen); cand = pool.filter(i => !seen.has(i.id)); if (!cand.length) continue; cand.forEach(i => { if (AI.itemVec(i.id)) seen.add(i.id); }); }
+    const m = await Smart.matchRule(r, cand); if (!m.length) continue;
+    for (const id of m) { const it = itemById(id); if (!it) continue; if (r.action === 'vault') it.vault = true; else if (!it.cols.includes(r.col)) it.cols.push(r.col); it.ruled = [...(it.ruled || []), r.id]; }
+    r.count = (r.count || 0) + m.length; r.last = Date.now(); total += m.length;
+    msgs.push(`${m.length} → ${r.action === 'vault' ? 'Vault' : '“' + colById(r.col).name + '”'}`);
+  }
+  if (total) { await save(); if (!quiet) toast('Smart rules: ' + msgs.join(', '), 4000); if (view !== 'best' && view !== 'dupes') render(); }
+  return total;
+}
+function renderRules() {
+  const body = $('#rulesBody'); if (!body) return; const rules = rulesOf();
+  body.innerHTML = `<div class="section-title"><h2>Smart rules</h2><span>${rules.length} rule${rules.length === 1 ? '' : 's'}</span></div>
+    <p class="sub-note">Rules run on this device whenever new items are indexed or you edit tags. Each rule moves an item once, so if you take something back out of the Vault it stays out.</p>
+    <div class="card rows rules">${rules.map(r => `<div class="row rule" data-rid="${r.id}"><div class="meta">${esc(r.name || Smart.describe(r, (colById(r.col) || {}).name))}<small>${Smart.describe(r, (colById(r.col) || {}).name)}${r.count ? ` · applied to ${r.count}` : ''}${r.action === 'col' && !colById(r.col) ? ' · collection was deleted' : ''}</small></div>
+      <button class="switch" role="switch" aria-checked="${!!r.on}" data-ron="${r.id}" aria-label="Rule on"></button><button class="iconbtn sm" data-rdel="${r.id}" aria-label="Delete rule">${IC.trash}</button></div>`).join('') ||
+      `<div class="row"><div class="meta">No rules yet<small>Example: items tagged “beach” → collection “Summer”, or items looking like “documents” → Vault.</small></div></div>`}</div>
+    <div class="dact top"><button class="btn btn-primary btn-sm" id="ruleAdd">${IC.plus}Add rule</button>${rules.length ? `<button class="btn btn-ghost btn-sm" id="ruleRun">Run rules now</button>` : ''}</div>`;
+  hydrateIcons(body);
+  body.querySelectorAll('[data-ron]').forEach(b => b.onclick = async () => { const r = rules.find(x => x.id === b.dataset.ron); r.on = !r.on; await save(); renderRules(); if (r.on) applyRules({ only: [r.id] }); });
+  body.querySelectorAll('[data-rdel]').forEach(b => b.onclick = async () => { const r = rules.find(x => x.id === b.dataset.rdel); if (!(await confirmBox('Delete rule?', 'Items it already moved stay where they are.', 'Delete', true))) return; idx.settings.rules = rules.filter(x => x !== r); await save(); renderRules(); });
+  $('#ruleAdd').onclick = addRuleDialog;
+  const rr = $('#ruleRun'); if (rr) rr.onclick = async () => { const n = await applyRules(); if (!n) toast('Rules ran: nothing new to move'); renderRules(); };
+}
+async function addRuleDialog() {
+  const tags = [...new Set(idx.items.flatMap(i => [...(i.tags || []), ...(i.aiTags || [])]))].sort();
+  const res = await modal(`<h3>New smart rule</h3>
+    <div class="rule-form"><label class="fl">When an item is</label><select class="field" id="rKind"><option value="tag">tagged</option>${AI.hasIndex() ? '<option value="search">looking like (AI search)</option>' : ''}</select>
+    <input class="field" id="rVal" placeholder="e.g. beach" list="rTags" autocomplete="off"><datalist id="rTags">${tags.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+    <label class="fl">then</label><select class="field" id="rAct"><option value="vault">move it to the Vault</option>${idx.collections.map(c => `<option value="col:${c.id}">add it to “${esc(c.name)}”</option>`).join('')}<option value="new">add it to a new collection…</option></select>
+    <label class="chk"><input type="checkbox" id="rNow" checked> Also apply to items already in my library</label><p class="sub-note" id="rPrev"></p></div>
+    <div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button><button class="btn btn-primary" data-ok>Create rule</button></div>`, (m, close) => {
+    const prev = async () => { const v = m.querySelector('#rVal').value.trim(), p = m.querySelector('#rPrev'); if (!v) { p.textContent = ''; return; }
+      const r = { id: '_', kind: m.querySelector('#rKind').value, value: v, action: 'vault' }; const n = (await Smart.matchRule(r, idx.items.filter(i => !i.vault))).length; p.textContent = `${n} item${n === 1 ? '' : 's'} in your library match right now.`; };
+    let t; m.querySelector('#rVal').addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 350); }); m.querySelector('#rKind').onchange = prev;
+    m.querySelector('[data-ok]').onclick = () => { const v = m.querySelector('#rVal').value.trim(); if (!v) { m.querySelector('#rVal').focus(); return; } close({ kind: m.querySelector('#rKind').value, value: v.slice(0, 80), act: m.querySelector('#rAct').value, now: m.querySelector('#rNow').checked }); };
+  });
+  if (!res || typeof res !== 'object') return;
+  let action = 'vault', col = null;
+  if (res.act === 'new') { const c = await newCollection(); if (!c) return; action = 'col'; col = c.id; }
+  else if (res.act.startsWith('col:')) { action = 'col'; col = res.act.slice(4); }
+  const r = { id: uid(), on: true, kind: res.kind, value: res.value, action, col, created: Date.now(), count: 0 };
+  if (!res.now) idx.items.forEach(it => { it.ruled = [...(it.ruled || []), r.id]; });   // only future items
+  rulesOf().push(r); await save(); if (view === 'rules') renderRules();
+  const n = await applyRules({ only: [r.id] }); if (!n) toast('Rule created'); if (view === 'rules') renderRules();
+}
+
 /* ---------- backup / restore ---------- */
 async function exportBackup() {
   const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); });
@@ -966,4 +1118,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
 })();
-window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI };
+window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

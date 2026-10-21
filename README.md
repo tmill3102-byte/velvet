@@ -10,3 +10,5 @@ A private, encrypted photo & video gallery that runs entirely in your browser.
 Your photos and videos never leave your device. They're encrypted (AES-256-GCM) with your passcode and stored locally. This site only serves the app code. **If you forget your passcode, your data cannot be recovered.** Export a backup from Profile now and then.
 
 **On-device AI (v1.1, optional):** smart search ("sunset on the beach"), auto-tags and a duplicate finder, all running on your device with Apple MobileCLIP-S0 (≈93 MB, downloaded once from this site and cached for offline use). No photo, tag or query is ever uploaded. Turn it on in Profile → On-device AI. Licenses: `models/Xenova/mobileclip_s0/LICENSE`, `js/vendor/transformers/`.
+
+**New in v1.2:** smart albums (places, themes and moments from capture dates), a best-shot picker for bursts and look-alikes (keeps the best and archives the rest, with restore from Profile → Archive), and smart rules ("items tagged X / looking like Y → Vault or a collection"). All on-device and encrypted.

@@ -1,6 +1,6 @@
 // Velvet vision helpers: frame sampling, perceptual hash, colours, quality.
 // Shared by thumbnails, on-device AI indexing, duplicates, and future chapters/highlights.
-import { once, frameReady, drawScaled, sample, isBlank, toJpeg, scoreFrame, timed } from './thumbs.js';
+import { once, frameReady, drawScaled, sample, isBlank, toJpeg, scoreFrame, timed, probeMp4 } from './thumbs.js';
 
 /* Sample frames from a video file. fractions: positions 0..1 (or times: seconds).
    Reuses one <video> + one canvas; total time capped by budget (ms). Returns [{t, blob, score}]. */
@@ -68,4 +68,29 @@ export function hamming(a, b) {
   if (!a || !b || a.length !== b.length) return 64; let d = 0;
   for (let i = 0; i < a.length; i++) { let x = parseInt(a[i], 16) ^ parseInt(b[i], 16); while (x) { d += x & 1; x >>= 1; } }
   return d;
+}
+
+/* Capture date (ms) from the file itself: JPEG EXIF DateTimeOriginal, MP4/MOV mvhd creation time. null if unknown. */
+export async function captureDate(file, mime = '') {
+  try {
+    if (/video|mp4|quicktime/.test(mime)) { const p = await probeMp4(file); return p && p.created && p.created < Date.now() + 864e5 ? p.created : null; }
+    if (!/jpe?g/i.test(mime)) return null;
+    const v = new DataView(await file.slice(0, 256 * 1024).arrayBuffer()); if (v.getUint16(0) !== 0xFFD8) return null;
+    let o = 2;
+    while (o + 4 < v.byteLength) {
+      const mk = v.getUint16(o), len = v.getUint16(o + 2);
+      if (mk === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) {         // "Exif"
+        const t = o + 10, le = v.getUint16(t) === 0x4949, u16 = x => v.getUint16(x, le), u32 = x => v.getUint32(x, le);
+        const ifd = (off, want) => { const n = u16(t + off), r = {}; for (let i = 0; i < n; i++) { const e = t + off + 2 + i * 12, tag = u16(e); if (want.includes(tag)) r[tag] = { type: u16(e + 2), cnt: u32(e + 4), val: u32(e + 8), at: e + 8 }; } return r; };
+        const str = en => { let s = ''; const at = en.cnt > 4 ? t + en.val : en.at; for (let i = 0; i < en.cnt - 1; i++) s += String.fromCharCode(v.getUint8(at + i)); return s; };
+        const i0 = ifd(u32(t + 4), [0x8769, 0x0132]); let ds = null;
+        if (i0[0x8769]) { const ex = ifd(i0[0x8769].val, [0x9003, 0x9004]); const en = ex[0x9003] || ex[0x9004]; if (en) ds = str(en); }
+        if (!ds && i0[0x0132]) ds = str(i0[0x0132]);
+        const m = ds && ds.match(/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/); if (!m) return null;
+        const d = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime(); return d > 315532800000 && d < Date.now() + 864e5 ? d : null;
+      }
+      if (mk === 0xFFDA || (mk & 0xFF00) !== 0xFF00) break; o += 2 + len;
+    }
+  } catch (e) { }
+  return null;
 }
