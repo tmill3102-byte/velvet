@@ -26,3 +26,14 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 - better People avatars;
 - *Save as collection* now hides the auto album, and any auto album can be hidden or restored;
 - age-related auto-tags are removed.
+
+**New in v1.5:** a new iOS-style design that's easier to use:
+- frosted tab bar with Search, large titles that shrink as you scroll, and a **+** button to import;
+- Photos-style square grid: pinch or use **View** to zoom, **Select** for a toolbar with Favorite, Add to, Vault and Delete;
+- press and hold (or right-click) any item for a quick menu with a preview;
+- bottom sheets you can swipe down, swipe from the left edge to go back, pull down to refresh;
+- **Undo** after deleting, archiving, moving to the Vault or removing from a collection;
+- a simpler player: tap to show or hide controls, swipe down to close; chapters and highlights are still there;
+- grouped Settings in Profile, a 3-card tour, clearer empty screens, and a text size setting;
+- respects Reduce Motion and Reduce Transparency; sidebar layout on desktop;
+- fixes a freeze in WebKit (Safari's engine) when locking or unlocking a large grid.

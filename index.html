@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/ios.css">
 </head>
 <body>
 <div class="app locked" id="app" aria-hidden="true">
@@ -33,45 +34,40 @@
     </div>
   </aside>
   <main class="main" id="main">
-    <div class="topbar">
-      <button class="iconbtn" data-act="lock" aria-label="Lock"><span data-ic="lock"></span></button>
-      <div class="brand"><div class="wordmark">Velvet</div><small><span data-ic="lockSm"></span>PRIVATE GALLERY</small></div>
-      <button class="iconbtn" data-act="import" aria-label="Import"><span data-ic="plus"></span></button>
+    <div class="topbar" id="navbar">
+      <div class="nb-l"><button class="iconbtn nb-lock" data-act="lock" aria-label="Lock Velvet"><span data-ic="lock"></span></button><button class="nb-back" id="nbBack" aria-label="Back"><span data-ic="back"></span><span id="nbBackT">Back</span></button></div>
+      <div class="nb-title" id="nbTitle">Library</div>
+      <div class="nb-r" id="nbRight"></div>
     </div>
+    <div class="ptr" id="ptr" aria-hidden="true"><i></i></div>
 
     <section class="view" id="v-library">
-      <div class="lib-head">
-        <div class="hello">Welcome back,<h1>Indulge in your private world.</h1></div>
-        <div class="head-actions">
-          <label class="searchbar floating" style="flex:1"><span data-ic="search"></span><input id="libSearch" placeholder="Search your gallery…" autocomplete="off"><button class="sb-icon" data-nav="search" aria-label="Filters"><span data-ic="sliders"></span></button></label>
-          <button class="btn btn-primary" data-act="import"><span data-ic="plus"></span>Import</button>
-        </div>
-      </div>
-      <div class="toolrow"><div class="chips" id="libChips"></div><div class="tools"><button class="btn btn-ghost btn-sm" data-act="folder" id="folderBtn"><span data-ic="folder"></span><span class="t">Import folder</span></button><button class="btn btn-ghost btn-sm" data-act="select"><span data-ic="check"></span><span class="t">Select</span></button></div></div>
+      <header class="lt"><h1>Library</h1><p id="libSub"></p></header>
+      <div class="toolrow"><div class="chips seg" id="libChips" role="tablist" aria-label="Show"></div><div class="tools"><button class="btn btn-ghost btn-sm" data-act="folder" id="folderBtn"><span data-ic="folder"></span><span class="t">Import folder</span></button><button class="txtbtn" data-act="select">Select</button></div></div>
       <div class="grid" id="libGrid"></div>
     </section>
 
     <section class="view" id="v-collections">
-      <div class="section-title"><h2>Collections</h2><span id="colCount"></span></div>
+      <header class="lt"><h1>Collections</h1><p id="colCount"></p></header>
       <div id="peopleRow"></div>
       <div id="smartAlbums"></div>
       <div class="cols" id="colGrid"></div>
     </section>
 
     <section class="view" id="v-collection">
-      <div class="backrow"><button class="iconbtn" data-nav="collections" aria-label="Back"><span data-ic="back"></span></button><span class="eyebrow">Collections</span><span style="flex:1"></span><button class="btn btn-ghost btn-sm" data-act="select"><span data-ic="check"></span><span class="t">Select</span></button></div>
+      <div class="backrow"><button class="iconbtn" data-nav="collections" aria-label="Back"><span data-ic="back"></span></button><span class="eyebrow">Collections</span><span style="flex:1"></span><button class="txtbtn" data-act="select">Select</button></div>
       <div class="hero" id="colHero"></div>
       <div class="grid" id="colItems"></div>
     </section>
 
     <section class="view" id="v-search">
       <div class="search-big">
-        <div class="eyebrow" style="margin-bottom:12px">Search</div>
-        <label class="searchbar"><span data-ic="search"></span><input id="q" placeholder="Search titles and tags…" autocomplete="off"><button class="sb-icon" id="qClear" aria-label="Clear"><span data-ic="close"></span></button></label>
+        <header class="lt"><h1>Search</h1></header>
+        <label class="searchbar"><span data-ic="search"></span><input id="q" type="search" enterkeyhint="search" placeholder="Photos, tags, people, places…" autocomplete="off"><button class="sb-icon" id="qClear" aria-label="Clear search"><span data-ic="close"></span></button></label>
         <div id="searchPeople"></div>
-        <div class="sub-h">Predictive suggestions</div>
+        <div class="sub-h">Suggestions</div>
         <div class="chips suggest" id="suggest"></div>
-        <div class="sub-h">Tags</div>
+        <div class="sub-h">Browse by tag</div>
         <div class="chips" id="tags"></div>
       </div>
       <div class="sub-h" id="resH">Results</div>
@@ -79,7 +75,7 @@
     </section>
 
     <section class="view" id="v-vault">
-      <div class="vault-head"><div class="eyebrow">Private vault</div><div class="script">Vault</div><div class="vault-lock" data-ic="lockBig"></div></div>
+      <header class="lt"><h1>Vault</h1><p>Extra-private. Hidden from Library, Collections and Search.</p></header>
       <div id="vaultBody"></div>
     </section>
 
@@ -108,13 +104,14 @@
       <div id="rulesBody"></div>
     </section>
     <section class="view" id="v-profile">
+      <header class="lt"><h1>Profile</h1><p>Settings, storage and backups</p></header>
       <div class="profile" id="profileBody"></div>
     </section>
   </main>
   <nav class="bottom-nav" id="bottomNav"></nav>
 </div>
 
-<div class="overlay open" id="lock" role="dialog" aria-label="Velvet is locked"><div class="clock" id="clock"></div><div class="gate" id="gate"></div></div>
+<div class="overlay open" id="lock" role="dialog" aria-label="Velvet is locked"><div class="clock" id="clock"></div><div class="gate" id="gate"></div><div class="lock-foot"><span data-ic="shield"></span>Encrypted and stored only on this device</div></div>
 
 <div class="overlay" id="lightbox" role="dialog" aria-label="Photo viewer">
   <div class="lb-stage" id="lbStage"></div>
@@ -138,7 +135,7 @@
   <video id="vid" playsinline webkit-playsinline preload="auto"></video>
   <div class="pl-vig"></div>
   <div class="spinner"></div>
-  <div class="pl-ui pl-top"><button class="iconbtn" id="plClose" aria-label="Close"><span data-ic="back"></span></button><span class="pl-title" id="plTitle"></span><span class="sp"></span><span class="pl-brand"><span data-ic="lockSm"></span>Velvet · Private Gallery</span><button class="iconbtn" id="plThumb" aria-label="Set as preview" title="Set this frame as the preview"><span data-ic="photo"></span></button><button class="iconbtn" id="plMore" aria-label="More"><span data-ic="more"></span></button></div>
+  <div class="pl-ui pl-top"><button class="iconbtn" id="plClose" aria-label="Close"><span data-ic="down"></span></button><span class="pl-title" id="plTitle"></span><span class="sp"></span><span class="pl-brand"><span data-ic="lockSm"></span>Velvet · Private Gallery</span><button class="iconbtn" id="plMore" aria-label="More options"><span data-ic="more"></span></button></div>
   <div class="pl-ui pl-center">
     <button class="skip" id="plBack" aria-label="Back 10 seconds"><span data-ic="rew"></span><b>10</b></button>
     <button class="bigplay" id="plPlay" aria-label="Play/Pause"><span data-ic="play"></span></button>
@@ -147,6 +144,7 @@
   <div class="pl-msg" id="plMsg"></div>
   <div class="pl-ui pl-bottom">
     <div class="prog" id="prog"><div class="track"><div class="buf" id="buf"></div><div class="fill" id="fill"></div></div><div class="knob" id="knob"></div><div class="tip" id="tip">0:00</div><div class="chmarks" id="chMarks"></div></div>
+    <div class="pl-times"><span id="tCur">0:00</span><span id="chNow"></span><span id="tLeft">0:00</span></div>
     <div class="ctrls">
       <span class="time" id="time">0:00 / 0:00</span>
       <button class="cbtn" id="cPlay" aria-label="Play/Pause"><span data-ic="play"></span></button>
@@ -154,7 +152,7 @@
       <button class="cbtn" id="cFwd" aria-label="Forward 10s"><span data-ic="fwd"></span><b>10</b></button>
       <button class="cbtn" id="cSpeed" aria-label="Playback speed">1x</button>
       <button class="cbtn" id="cMute" aria-label="Mute"><span data-ic="vol"></span></button>
-      <button class="cbtn" id="cChap" aria-label="Chapters" title="Chapters"><span data-ic="chap"></span><i class="cbadge" id="chBadge"></i></button><button class="cbtn" id="cReel" aria-label="Highlights" title="Highlight reel"><span data-ic="reel"></span></button><button class="cbtn" id="cFav" aria-label="Favorite"><span data-ic="heart"></span></button>
+      <button class="cbtn lbl" id="cChap" aria-label="Chapters" title="Chapters"><span data-ic="chap"></span><i class="cbadge" id="chBadge"></i><em>Chapters</em></button><button class="cbtn lbl" id="cReel" aria-label="Highlights" title="Highlight reel"><span data-ic="reel"></span><em>Highlights</em></button><button class="cbtn lbl" id="cFav" aria-label="Favorite"><span data-ic="heart"></span><em>Favorite</em></button><button class="cbtn lbl" id="plThumb" aria-label="Use this frame as the preview" title="Use this frame as the preview"><span data-ic="photo"></span><em>Set cover</em></button>
       <button class="cbtn" id="cFull" aria-label="Fullscreen"><span data-ic="full"></span></button>
     </div>
     <div class="chstrip" id="chStrip"></div>
@@ -164,6 +162,7 @@
 </div>
 
 <div class="selbar" id="selbar"></div>
+<div class="cxm" id="cxm" role="dialog" aria-label="Item options"></div>
 <div class="prog-ov" id="progOv"><div class="l"><span id="progL"></span><span id="progP"></span></div><div class="bar"><i id="progBar"></i></div></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <div id="drop">Drop photos, videos or folders</div>

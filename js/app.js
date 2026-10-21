@@ -5,6 +5,7 @@ import * as Vision from './vision.js';
 import * as Smart from './smart.js';
 import * as Scenes from './scenes.js';
 import * as People from './people.js';
+import * as UI from './ios.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -55,7 +56,15 @@ const IC = {
   upload: S('<path d="M12 20V9M7 13.5l5-5 5 5M5 4h14"/>'),
   image: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M20.5 15l-4.5-4.5L7 19.5"/>'),
   key: S('<circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l2.5 2.5"/>'),
-  minus: S('<path d="M5 12h14"/>')
+  minus: S('<path d="M5 12h14"/>'),
+  down: S('<path d="M5 9l7 7 7-7"/>'),
+  text: S('<path d="M3.5 18L8 6.5 12.5 18M5.2 14h5.6M14 18l3.2-8 3.3 8M15.1 15.5h4.2"/>'),
+  help: S('<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 014.8.9c0 1.7-2.4 2-2.4 3.7"/><circle cx="12" cy="16.9" r=".6" fill="currentColor"/>'),
+  zoomin: S('<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M12 3.5v17M3.5 12h17"/>'),
+  zoomout: S('<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/>'),
+  shape: S('<rect x="3.5" y="3.5" width="7" height="10" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="6" rx="1.6"/><rect x="3.5" y="16" width="7" height="4.5" rx="1.6"/><rect x="13.5" y="12" width="7" height="8.5" rx="1.6"/>'),
+  open: S('<path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h4"/>'),
+  info: S('<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".7" fill="currentColor"/>')
 };
 function hydrateIcons(root) { (root || document).querySelectorAll('[data-ic]').forEach(el => { if (!el.dataset.done) { el.innerHTML = IC[el.dataset.ic] || ''; el.dataset.done = '1'; if (el.tagName === 'SPAN') el.style.display = 'inline-flex'; } }); }
 
@@ -68,24 +77,38 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const FB = ['linear-gradient(150deg,#5A0F24,#14040a)', 'linear-gradient(200deg,#8E0E36,#2a0612 70%)', 'radial-gradient(circle at 30% 20%,#C2185B,#3A0A18 70%)', 'linear-gradient(160deg,#3A0A18,#0B0306)', 'radial-gradient(circle at 70% 70%,#FF2E88 0,#6d0b2a 40%,#14040a 80%)', 'linear-gradient(120deg,#4A0716,#A3123F,#1A060C)'];
 const fbFor = id => FB[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % FB.length];
-let toastT; function toast(msg, ms) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms || 2800); }
+let toastT, toastUndo = null;
+// toast(msg, ms, { undo }) : iOS-style capsule; with an undo callback it shows an Undo button (destructive actions)
+function toast(msg, ms, opt = {}) {
+  const t = $('#toast'); clearTimeout(toastT); toastUndo = opt.undo || null;
+  t.innerHTML = `<span class="tm"></span>${toastUndo ? '<button class="undo" id="toastUndo">Undo</button>' : ''}`; t.querySelector('.tm').textContent = msg;
+  t.classList.toggle('has-undo', !!toastUndo); t.classList.add('show');
+  if (toastUndo) t.querySelector('#toastUndo').onclick = e => { e.stopPropagation(); const f = toastUndo; toastUndo = null; t.classList.remove('show'); UI.haptic(); f(); };
+  toastT = setTimeout(() => { t.classList.remove('show'); toastUndo = null; if (opt.onExpire) opt.onExpire(); }, ms || (toastUndo ? 6500 : 2800));
+}
 function progress(label, f) {
   const o = $('#progOv'); if (label === null) { o.classList.remove('show'); return; }
   o.classList.add('show'); $('#progL').textContent = label; $('#progP').textContent = f == null ? '' : Math.round(f * 100) + '%'; $('#progBar').style.width = ((f || 0) * 100) + '%';
 }
 
 /* ---------- modal helpers ---------- */
-function modal(html, onMount) {
+// every dialog is a bottom sheet on phones (grabber, swipe down to dismiss) and a centred card on wide screens
+function modal(html, onMount, opts = {}) {
   return new Promise(resolve => {
-    const m = document.createElement('div'); m.className = 'modal'; m.innerHTML = `<div class="sheet" role="dialog">${html}</div>`;
+    const m = document.createElement('div'); m.className = 'modal' + (opts.cls ? ' ' + opts.cls : ''); m.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><div class="grab" aria-hidden="true"></div>${html}</div>`;
     document.body.appendChild(m); hydrateIcons(m); requestAnimationFrame(() => m.classList.add('show'));
     let done = false;
-    const close = v => { if (done) return; done = true; m.classList.remove('show'); setTimeout(() => m.remove(), 300); resolve(v); };
+    const close = v => { if (done) return; done = true; m.classList.remove('show'); m.classList.add('closing'); setTimeout(() => m.remove(), 320); resolve(v); };
+    UI.sheetDrag(m.querySelector('.sheet'), () => close(undefined));
     m.addEventListener('click', e => { if (e.target === m) close(undefined); const b = e.target.closest('[data-r]'); if (b) close(b.dataset.r); });
     m.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(undefined); } });
     onMount && onMount(m, close);
     const f = m.querySelector('input:not([type=checkbox])'); if (f && matchMedia('(hover:hover)').matches) setTimeout(() => f.focus(), 80);
   });
+}
+// iOS action sheet: a titled list of choices plus a separate Cancel. Resolves to the chosen key (or undefined)
+function actionSheet(title, items, msg) {
+  return modal(`${title || msg ? `<div class="as-head">${title ? `<b>${esc(title)}</b>` : ''}${msg ? `<span>${msg}</span>` : ''}</div>` : ''}<div class="menu">${items.filter(Boolean).map(i => `<button data-r="${i.r}" class="${i.danger ? 'danger' : ''}">${i.ic ? IC[i.ic] : ''}<span>${i.label}</span></button>`).join('')}</div><div class="actions"><button class="btn btn-ghost as-cancel" data-r="">Cancel</button></div>`, null, { cls: 'as' });
 }
 const confirmBox = (title, text, ok = 'OK', danger = false) => modal(`<h3>${esc(title)}</h3><p>${text}</p><div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button><button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-r="ok">${esc(ok)}</button></div>`).then(r => r === 'ok');
 function promptBox(title, text, value = '', ok = 'Save', type = 'text') {
@@ -109,18 +132,61 @@ const colById = id => idx.collections.find(c => c.id === id);
 const TABS = [['library', 'Library', 'grid'], ['collections', 'Collections', 'cols'], ['search', 'Search', 'search'], ['vault', 'Vault', 'vault'], ['profile', 'Profile', 'user']];
 $('#sideNav').innerHTML = TABS.map(t => `<button class="nav-btn" data-nav="${t[0]}"><span data-ic="${t[2]}"></span>${t[1]}</button>`).join('');
 $('#bottomNav').innerHTML = TABS.map(t => `<button class="bn" data-nav="${t[0]}"><span data-ic="${t[2]}"></span>${t[1]}</button>`).join('');
+/* iOS-style navigation stack: tabs are roots; collection, people, person, dupes, best, archive and rules are pushed screens
+   (back button + edge swipe). Each entry remembers its scroll position, collection and person. */
+const ROOTS = TABS.map(t => t[0]);
+let navStack = [{ v: 'library', y: 0 }];
 function nav(v, opt = {}) {
   if (!idx) return;
   if (view === 'vault' && v !== 'vault') vaultOpen = false;
-  endSelect();
-  const tab = v === 'collection' || v === 'people' || v === 'person' ? 'collections' : v;
+  endSelect(); closeCx();
+  const top = navStack[navStack.length - 1]; if (top) { top.y = window.scrollY; top.col = curCol; top.person = curPerson; }
+  let restoreY = null;
+  if (ROOTS.includes(v)) navStack = [{ v, y: 0 }];
+  else { const at = navStack.findIndex(e => e.v === v && (v !== 'collection' || e.col === curCol) && (v !== 'person' || e.person === curPerson));
+    if (at >= 0) { navStack.length = at + 1; restoreY = navStack[at].y; } else if (top && top.v === v && (v === 'person' || v === 'collection')) navStack[navStack.length - 1] = { v, y: 0 }; else navStack.push({ v, y: 0 }); }
+  const tab = navStack[0].v;
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'v-' + v));
-  $$('.nav-btn[data-nav],.bn').forEach(b => b.classList.toggle('active', b.dataset.nav === tab));
-  view = v; render();
+  $$('.nav-btn[data-nav],.bn').forEach(b => { const on = b.dataset.nav === tab; b.classList.toggle('active', on); if (b.classList.contains('bn')) b.setAttribute('aria-selected', String(on)); });
+  document.body.dataset.view = v; document.body.classList.toggle('pushed', navStack.length > 1);
+  view = v; render(); updNav();
   $$('#sideCols .nav-btn').forEach(b => b.classList.toggle('active', v === 'collection' && b.dataset.col === curCol));
   if (v === 'search' && opt.focus) setTimeout(() => { const q = $('#q'); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }, 60);
-  if (!opt.keepScroll) window.scrollTo(0, 0);
+  if (opt.back && restoreY != null) requestAnimationFrame(() => window.scrollTo(0, restoreY)); else if (!opt.keepScroll) window.scrollTo(0, 0);
+  requestAnimationFrame(() => titleWatch && titleWatch());
 }
+function goBack() {
+  if (navStack.length < 2) return false;
+  navStack.pop(); const e = navStack[navStack.length - 1];
+  if (e.col !== undefined) curCol = e.col; if (e.person !== undefined) curPerson = e.person;
+  nav(e.v, { back: true }); return true;
+}
+const TITLES = { library: 'Library', collections: 'Collections', search: 'Search', vault: 'Vault', profile: 'Profile', people: 'People', dupes: 'Duplicates', best: 'Best Shots', archive: 'Archive', rules: 'Smart Rules' };
+function titleOf(e) {
+  if (!e) return '';
+  if (e.v === 'collection') { const id = e.col !== undefined ? e.col : curCol; const c = isSmart(id) ? smartById(id) : colById(id); return c ? c.name : 'Collection'; }
+  if (e.v === 'person') { const p = People.isOpen() && People.person(e.person !== undefined ? e.person : curPerson); return p ? (p.name || 'Unnamed') : 'Person'; }
+  return TITLES[e.v] || '';
+}
+// navigation bar: back (or lock at a root), the inline title (shows once the large title scrolls away) and 1–2 actions
+function updNav() {
+  if (!idx) return;
+  const pushed = navStack.length > 1, prev = navStack[navStack.length - 2];
+  $('#nbTitle').textContent = titleOf(navStack[navStack.length - 1]);
+  const bt = prev ? titleOf(prev) : ''; $('#nbBackT').textContent = bt.length > 12 ? 'Back' : bt;
+  $('#navbar').classList.toggle('pushed', pushed);
+  const B = (act, ic, label, extra = '') => `<button class="iconbtn nb-act" ${act} aria-label="${label}" title="${label}" ${extra}>${IC[ic]}</button>`;
+  let r = '';
+  if (view === 'library') r = B('id="nbView"', 'more', 'View options') + B('data-act="import"', 'plus', 'Import photos and videos', 'data-primary');
+  else if (view === 'collections') r = B('id="nbAdd"', 'plus', 'Add', 'data-primary');
+  else if (view === 'collection') r = `<button class="txtbtn" data-act="select">Select</button>` + B('id="nbColMore"', 'more', 'Collection options');
+  else if (view === 'vault' && (!idx.settings.vaultPin || vaultOpen)) r = `<button class="txtbtn" data-act="select">Select</button>`;
+  $('#nbRight').innerHTML = r;
+  const vb = $('#nbView'); if (vb) vb.onclick = viewOptions;
+  const ab = $('#nbAdd'); if (ab) ab.onclick = async () => { const k = await actionSheet('', [{ r: 'import', label: 'Import photos & videos', ic: 'plus' }, { r: 'col', label: 'New collection', ic: 'cols' }]); if (k === 'import') pickFiles(); else if (k === 'col') newCollection(); };
+  const cm = $('#nbColMore'); if (cm) cm.onclick = () => { if (isSmart(curCol)) smartMenu(); else { const c = colById(curCol); if (c) collectionMenu(c); } };
+}
+$('#nbBack').onclick = () => { UI.haptic(); goBack(); };
 function render() {
   if (!idx) return;
   renderSideCols();
@@ -139,7 +205,10 @@ function render() {
 }
 document.addEventListener('click', e => {
   if (e.target.closest('.modal')) return;
-  const n = e.target.closest('[data-nav]'); if (n) { e.preventDefault(); nav(n.dataset.nav); return; }
+  const n = e.target.closest('[data-nav]'); if (n) { e.preventDefault(); const v = n.dataset.nav;
+    if ((n.classList.contains('bn') || n.classList.contains('nav-btn')) && navStack.length === 1 && navStack[0].v === v && window.scrollY > 0) { window.scrollTo({ top: 0, behavior: UI.reduceMotion() ? 'auto' : 'smooth' }); return; }  // tap the current tab again: scroll to top
+    if (n.classList.contains('backp') && navStack.length > 1 && navStack[navStack.length - 2].v === v) { goBack(); return; }
+    nav(v); return; }
   const a = e.target.closest('[data-act]');
   if (a) {
     const act = a.dataset.act;
@@ -152,18 +221,19 @@ document.addEventListener('click', e => {
 /* ---------- lock / setup gate ---------- */
 const app = $('#app'), lockEl = $('#lock'), gate = $('#gate');
 const isLocked = () => lockEl.classList.contains('open');
-function tick() { const d = new Date(); $('#clock').textContent = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ' · ' + d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }); }
+function tick() { const d = new Date(); $('#clock').innerHTML = `<b>${esc(d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s?[AP]M$/i, ''))}</b><span>${esc(d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' }))}</span>`; }
 tick(); setInterval(tick, 15000);
 function gateSetup() {
-  gate.innerHTML = `<div class="mono">V</div><h1>Welcome to Velvet</h1>
-   <p class="sub">Create a passcode. Everything you add is encrypted on this device with it.</p>
-   <input class="pass" id="p1" type="password" placeholder="Choose a passcode (min 6)" autocomplete="new-password">
-   <input class="pass" id="p2" type="password" placeholder="Repeat passcode" autocomplete="new-password">
-   <div class="warnbox"><b>Important:</b> there is no reset. If you forget this passcode, your photos and videos <b>cannot be recovered</b> by anyone, not even us.</div>
-   <label class="check"><input type="checkbox" id="pAck"> I understand a forgotten passcode means my files are gone for good.</label>
-   <div class="err" id="gErr"></div>
-   <button class="btn btn-primary" id="gGo">Create my private gallery</button>
-   <button class="btn btn-ghost" id="gRestore" style="height:44px">Restore from a .velvet backup</button>`;
+  lockEl.classList.add('setup');
+  gate.innerHTML = `<div class="wm">Velvet</div><h1>Welcome</h1>
+   <p class="sub">Your private gallery. Choose a passcode to lock it. Everything you add is encrypted with it and stays on this device.</p>
+   <div class="gcard"><input class="pass" id="p1" type="password" placeholder="New passcode (6+ characters)" autocomplete="new-password" aria-label="New passcode">
+   <input class="pass" id="p2" type="password" placeholder="Type it again" autocomplete="new-password" aria-label="Repeat passcode"></div>
+   <div class="warnbox"><b>There’s no reset.</b> If you forget this passcode, nobody can get your photos and videos back, not even us.</div>
+   <label class="check"><input type="checkbox" id="pAck"> I understand. A forgotten passcode means my files are gone for good.</label>
+   <div class="err" id="gErr" role="alert"></div>
+   <button class="btn btn-primary" id="gGo">Create my gallery</button>
+   <button class="txtbtn" id="gRestore">I have a backup (.velvet file)</button>`;
   const go = async () => {
     const a = $('#p1').value, b = $('#p2').value, err = $('#gErr');
     if (a.length < 6) { err.textContent = 'Use at least 6 characters.'; return; }
@@ -178,11 +248,12 @@ function gateSetup() {
 }
 let fails = 0, lockoutUntil = 0;
 function gateUnlock() {
-  gate.innerHTML = `<div class="mono">V</div><h1>Velvet is<br>locked</h1>
-   <input class="pass" id="pin" type="password" placeholder="Enter passcode" autocomplete="current-password">
-   <div class="err" id="gErr"></div>
-   <button class="btn btn-primary" id="gGo">Unlock</button>
-   <div class="hint">Unlock to enter your private world.</div>`;
+  lockEl.classList.remove('setup');
+  gate.innerHTML = `<div class="wm">Velvet</div>
+   <div class="gcard"><p class="sub">Your gallery is locked</p>
+   <input class="pass" id="pin" type="password" placeholder="Passcode" autocomplete="current-password" aria-label="Passcode" enterkeyhint="go">
+   <div class="err" id="gErr" role="alert"></div>
+   <button class="btn btn-primary" id="gGo">${IC.lock}<span>Unlock</span></button></div>`;
   const go = async () => {
     const inp = $('#pin'), err = $('#gErr'), btn = $('#gGo');
     if (Date.now() < lockoutUntil) { err.textContent = `Too many attempts. Try again in ${Math.ceil((lockoutUntil - Date.now()) / 1000)}s.`; return; }
@@ -191,8 +262,8 @@ function gateUnlock() {
     const ok = await Store.unlock(inp.value);
     if (!ok) {
       fails++; if (fails >= 5) lockoutUntil = Date.now() + 30000 * (fails - 4);
-      err.textContent = 'Wrong passcode.'; inp.value = ''; inp.classList.add('shake'); setTimeout(() => inp.classList.remove('shake'), 500);
-      btn.disabled = false; btn.textContent = 'Unlock'; inp.focus(); return;
+      err.textContent = 'Wrong passcode. Try again.'; inp.value = ''; inp.classList.add('shake'); UI.haptic('warn'); setTimeout(() => inp.classList.remove('shake'), 500);
+      btn.disabled = false; btn.innerHTML = `${IC.lock}<span>Unlock</span>`; inp.focus(); return;
     }
     fails = 0; idx = await Store.loadIndex(); afterUnlock(false);
   };
@@ -203,14 +274,15 @@ function afterUnlock(first) {
   idx.settings = Object.assign(Store.emptyIndex().settings, idx.settings || {});
   lockEl.classList.remove('open'); app.classList.remove('locked'); app.removeAttribute('aria-hidden');
   gate.innerHTML = '';
-  nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
-  if (first) setTimeout(() => toast('Your gallery is ready. Import something to begin.'), 600);
+  applyTextSize(); nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
+  if (first) setTimeout(() => toast('Your gallery is ready'), 600);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (aiOn() && People.on(idx)) People.open(idx).then(() => { if (view === 'collections') renderPeopleRow('#peopleRow'); }).catch(e => console.warn('People open', e));
   if (scrubBlockedTags()) save().catch(() => { });
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
 function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
+  flushDeletes(); closeCx(); $('#toast').classList.remove('show'); toastUndo = null;
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
   AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
@@ -282,17 +354,26 @@ function tileInner(it, i, opts, ph) {
 }
 /* JS masonry: explicit flex columns, filled shortest-first by aspect ratio.
    Avoids CSS multi-column / grid masonry, which mis-render in iOS Safari. */
+// v1.5: Photos-style square grid by default (rows line up; filled row by row). "Whole photos" keeps the old masonry.
+// zoom: pinch or View options change the column count; stored in the encrypted settings.
+const gridPref = () => { const g = (idx && idx.settings.grid) || {}; return { fit: !!g.fit, zoom: g.zoom || 0 }; };
 function gridCols(el) {
-  const w = el.clientWidth || el.parentElement?.clientWidth || innerWidth;
-  if (w < 700) return 2;
-  return Math.max(2, Math.min(5, Math.floor((w + 16) / (220 + 16))));
+  const w = el.clientWidth || el.parentElement?.clientWidth || innerWidth, { fit, zoom } = gridPref();
+  if (w < 700) return Math.max(fit ? 1 : 2, Math.min(fit ? 4 : 6, (fit ? 2 : 3) + zoom));
+  return Math.max(2, Math.min(12, (fit ? Math.floor((w + 16) / 236) : Math.floor((w + 4) / 234)) + zoom));
+}
+function setZoom(d) {
+  if (!idx) return; const g = idx.settings.grid = idx.settings.grid || {}, before = g.zoom || 0;
+  const els = ['#libGrid', '#colItems', '#results', '#vaultGrid', '#personGrid'].map(s => $(s)).filter(e => e && e._grid && e._grid.list.length && e.offsetParent);
+  const n0 = els[0] ? gridCols(els[0]) : 0; g.zoom = Math.max(-4, Math.min(4, before + d)); els.forEach(layoutGrid);
+  if (els[0] && gridCols(els[0]) === n0) g.zoom = before; else save();
 }
 function layoutGrid(el) {
   const st = el._grid; if (!st || !st.list.length) return;
-  const n = gridCols(el); st.n = n;
+  const n = gridCols(el); st.n = n; const sq = !gridPref().fit; el.classList.toggle('sq', sq);
   const cols = Array.from({ length: n }, () => ({ h: 0, html: [] }));
   st.list.forEach((it, i) => {
-    let c = cols[0]; for (const x of cols) if (x.h < c.h - 1e-6) c = x;
+    let c = cols[0]; if (sq) c = cols[i % n]; else for (const x of cols) if (x.h < c.h - 1e-6) c = x;
     c.h += 1 / Math.max(.5, Math.min(2, it.ar || 1)) + .04;
     c.html.push(tileHTML(it, i, st.opts));
   });
@@ -325,13 +406,16 @@ let lpT = null, longPressed = false;
 function bindGrid(el) {
   el.addEventListener('click', gridClick);
   el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList.contains('tile')) e.target.click(); });
-  el.addEventListener('contextmenu', e => { const t = e.target.closest('.tile'); if (!t) return; e.preventDefault(); itemSheet(itemById(t.dataset.id)); });
-  el.addEventListener('pointerdown', e => { const t = e.target.closest('.tile'); if (!t || e.pointerType === 'mouse') return; clearTimeout(lpT); lpT = setTimeout(() => { longPressed = true; if (navigator.vibrate) navigator.vibrate(10); itemSheet(itemById(t.dataset.id)); }, 550); });
+  // right-click / press and hold: iOS context menu with a preview (Open, Favorite, Add to collection, Vault, Details, Save, Delete)
+  el.addEventListener('contextmenu', e => { const t = e.target.closest('.tile'); if (!t) return; e.preventDefault(); if (selecting) return; openCx(itemById(t.dataset.id), t, e); });
+  el.addEventListener('pointerdown', e => { const t = e.target.closest('.tile'); if (!t || e.pointerType === 'mouse' || selecting) return; clearTimeout(lpT); t.classList.add('pressing'); lpT = setTimeout(() => { longPressed = true; t.classList.remove('pressing'); openCx(itemById(t.dataset.id), t); }, 480); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => el.addEventListener(ev, e => { const t = e.target.closest && e.target.closest('.tile'); if (t) t.classList.remove('pressing'); }));
+  UI.pinch(el, d => setZoom(d));
   ['pointerup', 'pointercancel', 'pointermove'].forEach(ev => el.addEventListener(ev, e => { if (ev !== 'pointermove' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6) clearTimeout(lpT); }));
 }
 ['#libGrid', '#colItems', '#results'].forEach(s => bindGrid($(s)));
 function toggleFav(it) {
-  it.fav = !it.fav; save();
+  it.fav = !it.fav; save(); UI.haptic();
   $$(`.tile[data-id="${it.id}"] .heart`).forEach(h => { h.classList.toggle('on', it.fav); h.classList.remove('pop'); void h.offsetWidth; h.classList.add('pop'); });
   toast(it.fav ? 'Added to Favorites' : 'Removed from Favorites');
   if (libFilter === 'favorites' && view === 'library') setTimeout(renderLibrary, 350);
@@ -341,18 +425,43 @@ function toggleFav(it) {
 /* ---------- library ---------- */
 const FILTERS = [['all', 'All'], ['photos', 'Photos'], ['videos', 'Videos'], ['favorites', 'Favorites']];
 const sortNew = list => list.slice().sort((a, b) => b.added - a.added);
+const dev = host ? 'this PC' : isIOS ? 'this iPhone' : 'this device';
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function renderLibrary() {
-  $('#libChips').innerHTML = FILTERS.map(c => `<button class="chip ${libFilter === c[0] ? 'on' : ''}" data-f="${c[0]}">${c[0] === 'favorites' ? IC.heart : ''}${c[1]}</button>`).join('');
+  $('#libChips').innerHTML = FILTERS.map(c => `<button class="chip ${libFilter === c[0] ? 'on' : ''}" data-f="${c[0]}" role="tab" aria-selected="${libFilter === c[0]}">${c[1]}</button>`).join('');
   const all = visible();
+  const np = all.filter(i => i.type === 'photo').length, nv = all.length - np;
+  $('#libSub').textContent = all.length ? `${plural(np, 'photo')} · ${plural(nv, 'video')}` : `Encrypted on ${dev}`;
   const list = sortNew(all.filter(i => libFilter === 'all' || (libFilter === 'photos' && i.type === 'photo') || (libFilter === 'videos' && i.type === 'video') || (libFilter === 'favorites' && i.fav)));
-  const empty = all.length ? `<div class="empty"><b>${libFilter === 'favorites' ? 'No favorites yet' : 'Nothing here'}</b>${libFilter === 'favorites' ? 'Tap the heart on anything you love.' : 'Try another filter.'}</div>` :
-    `<div class="hero-empty"><div class="v">V</div><h2>Your private world starts here</h2><p>Add photos and videos from this device. They’re encrypted with your passcode and never leave ${host ? 'this PC' : 'this device'}.</p>
+  const E = { favorites: ['heart', 'No favorites yet', 'Press and hold a photo or video, then tap Favorite. They’ll all be here.'], photos: ['photo', 'No photos yet', 'Tap + to add some.'], videos: ['film', 'No videos yet', 'Tap + to add some.'] }[libFilter] || ['photo', 'Nothing here', 'Try another filter.'];
+  const tour = !idx.settings.tourDone;
+  const empty = all.length ? emptyHTML(...E) :
+    `<div class="hero-empty${tour ? ' tour' : ''}">${tour ? tourHTML() : `<div class="v">Velvet</div><h2>Nothing here yet</h2><p>Add photos and videos from ${dev}. They’re encrypted with your passcode and never leave it.</p>`}
      <div class="row2"><button class="btn btn-primary" data-act="import"><span data-ic="plus"></span>Import photos &amp; videos</button>${!isIOS ? '<button class="btn btn-ghost" data-act="folder"><span data-ic="folder"></span>Import a folder</button>' : ''}</div>
-     ${!isIOS ? '<p style="margin:18px 0 0;font-size:12.5px">Tip: you can also drag files or whole folders onto this window.</p>' : ''}</div>`;
+     ${!isIOS ? '<p class="tipline">Tip: you can also drag files or whole folders onto this window.</p>' : ''}</div>`;
   renderGrid($('#libGrid'), list, empty);
+  if (!all.length && tour) bindTour($('#libGrid'), async () => { idx.settings.tourDone = 1; await save(); renderLibrary(); });
 }
-$('#libChips').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; libFilter = c.dataset.f; renderLibrary(); });
-$('#libSearch').addEventListener('input', e => { const v = e.target.value; e.target.value = ''; $('#q').value = v; nav('search', { focus: true }); });
+function emptyHTML(ic, title, text, btn) { return `<div class="empty"><span class="eic">${IC[ic] || ''}</span><b>${title}</b><span class="et">${text}</span>${btn || ''}</div>`; }
+$('#libChips').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c || c.dataset.f === libFilter) return; UI.haptic(); libFilter = c.dataset.f; renderLibrary(); });
+{ const ls = $('#libSearch'); if (ls) ls.addEventListener('input', e => { const v = e.target.value; e.target.value = ''; $('#q').value = v; nav('search', { focus: true }); }); }
+/* first-run walkthrough: three swipeable cards (inline in the empty Library, or as a sheet from Profile → Help) */
+const TOUR = [
+  ['lock', 'Private by design', () => `Everything you add is encrypted with your passcode and stays on ${dev}. Nothing is uploaded, ever.`],
+  ['plus', 'Add photos & videos', () => 'Tap <b>+</b> to import. Press and hold anything for quick actions, and pinch the grid to make tiles bigger or smaller.'],
+  ['vault', 'Extra privacy, smart extras', () => 'Move things to the <b>Vault</b> to hide them everywhere else. Smart search, auto albums and People are optional (Profile) and run on this device too.']];
+function tourHTML() {
+  return `<div class="tour-cards" role="group" aria-label="How Velvet works">${TOUR.map(([ic, t, d], k) => `<section class="tcard" aria-label="${k + 1} of ${TOUR.length}"><span class="tic">${IC[ic]}</span><h2>${t}</h2><p>${d()}</p></section>`).join('')}</div>
+   <div class="tour-nav"><span class="dots">${TOUR.map((_, k) => `<i class="${k ? '' : 'on'}"></i>`).join('')}</span><button class="txtbtn tour-next">Next</button></div>`;
+}
+function bindTour(root, onDone) {
+  const cards = root.querySelector('.tour-cards'), dots = [...root.querySelectorAll('.dots i')], nx = root.querySelector('.tour-next'); if (!cards) return;
+  const at = () => Math.round(cards.scrollLeft / Math.max(1, cards.clientWidth));
+  const sync = () => { const k = at(); dots.forEach((d, i) => d.classList.toggle('on', i === k)); nx.textContent = k >= TOUR.length - 1 ? 'Got it' : 'Next'; };
+  cards.addEventListener('scroll', () => requestAnimationFrame(sync), { passive: true });
+  nx.onclick = () => { const k = at(); if (k >= TOUR.length - 1) { onDone && onDone(); return; } cards.scrollTo({ left: (k + 1) * cards.clientWidth, behavior: UI.reduceMotion() ? 'auto' : 'smooth' }); setTimeout(sync, 400); };
+}
+function showTour() { return modal(`<h3>How Velvet works</h3>${tourHTML()}`, (m, close) => bindTour(m, () => close())); }
 if (isIOS) $('#folderBtn').style.display = 'none';
 
 /* ---------- collections ---------- */
@@ -366,13 +475,14 @@ function renderSideCols() {
   hydrateIcons($('#sideCols')); $('#sideNewCol').onclick = () => newCollection();
 }
 function renderCollections() {
-  $('#colCount').textContent = idx.collections.length + ' collection' + (idx.collections.length === 1 ? '' : 's');
+  $('#colCount').textContent = idx.collections.length ? plural(idx.collections.length, 'collection') : 'Group your photos and videos any way you like';
   $('#colGrid').innerHTML = idx.collections.map((c, i) => `<div class="col-card" data-col="${c.id}" style="--fb:${fbFor(c.id)};--i:${i}" role="button" tabindex="0">${coverImg(c)}<div class="tint user"></div><div class="gloss"></div>
      <div class="cmenu"><button class="iconbtn" data-cm="${c.id}" aria-label="Collection options">${IC.more}</button></div>
      <div class="info"><div><h3>${esc(c.name)}</h3><p>${colItems(c).length} items</p></div><span class="lockchip">${IC.lock}</span></div></div>`).join('') +
-    `<button class="col-card col-new" id="newCol" style="--i:${idx.collections.length}">${IC.plus}New collection</button>`;
+    `<button class="col-card col-new" id="newCol" style="--i:${idx.collections.length}"><span class="cv">${IC.plus}</span><span class="nt">New collection</span></button>`;
   hydrateCovers($('#colGrid')); renderSmartAlbums(); renderPeopleRow('#peopleRow');
   $('#newCol').onclick = () => newCollection();
+  $$('#colGrid .col-card[data-col]').forEach(c => { const f = () => { const x = colById(c.dataset.col); if (x) collectionMenu(x); }; c.oncontextmenu = e => { e.preventDefault(); f(); }; UI.longPress(c, f); });
   $$('[data-cm]').forEach(b => b.onclick = e => { e.stopPropagation(); collectionMenu(colById(b.dataset.cm)); });
 }
 async function newCollection(addIds) {
@@ -382,13 +492,16 @@ async function newCollection(addIds) {
   await save(); render(); toast(`Created “${c.name}”`); return c;
 }
 async function collectionMenu(c) {
-  const r = await modal(`<h3>${esc(c.name)}</h3><div class="menu"><button data-r="rename">${IC.edit}Rename</button><button data-r="import">${IC.plus}Import into this collection</button><button class="danger" data-r="delete">${IC.trash}Delete collection</button></div><div class="actions"><button class="btn btn-ghost" data-r="">Close</button></div>`);
+  const r = await actionSheet(c.name, [{ r: 'import', label: 'Add photos & videos', ic: 'plus' }, { r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'delete', label: 'Delete collection', ic: 'trash', danger: true }]);
+  if (r === 'reel') { openReel(colItems(c), c.name); return; }
   if (r === 'rename') { const n = (await promptBox('Rename collection', '', c.name) || '').trim(); if (n) { c.name = n.slice(0, 60); await save(); render(); } }
   else if (r === 'import') { curCol = c.id; pickFiles(c.id); }
   else if (r === 'delete') {
     if (await confirmBox('Delete collection?', `“${esc(c.name)}” will be removed. The photos and videos inside stay in your Library.`, 'Delete', true)) {
+      const pos = idx.collections.indexOf(c), members = idx.items.filter(i => (i.cols || []).includes(c.id)).map(i => i.id);
       idx.collections = idx.collections.filter(x => x !== c); idx.items.forEach(i => i.cols = (i.cols || []).filter(id => id !== c.id));
-      await save(); if (view === 'collection') nav('collections'); else render(); toast('Collection deleted');
+      await save(); if (view === 'collection') nav('collections'); else render(); UI.haptic();
+      toast(`Deleted “${c.name}”`, 0, { undo: async () => { if (!idx) return; idx.collections.splice(Math.min(pos, idx.collections.length), 0, c); members.forEach(id => { const it = itemById(id); if (it && !it.cols.includes(c.id)) it.cols.push(c.id); }); await save(); render(); toast('Collection restored'); } });
     }
   }
 }
@@ -397,12 +510,13 @@ function renderCollection() {
   if (isSmart(curCol)) { renderSmartCollection(); return; }
   const c = colById(curCol); if (!c) { nav('collections'); return; }
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(c.id));
-  h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
-    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${colItems(c).length} items · Private</p></div>
-    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="colImport">${IC.plus}<span>Import</span></button><button class="iconbtn" id="colMore" aria-label="Options">${IC.more}</button></div>`;
-  hydrateCovers(h);
-  $('#colImport').onclick = () => pickFiles(c.id); $('#colReel').onclick = () => openReel(colItems(c), c.name); $('#colMore').onclick = () => collectionMenu(c);
-  renderGrid($('#colItems'), sortNew(colItems(c)), `<div class="empty"><b>This collection is empty</b>Import straight into it, or use <i>Select</i> in your Library and choose “Add to collection”.</div>`);
+  const n = colItems(c).length;
+  h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div class="hero-fade"></div>
+    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private</p></div>
+    <div class="hero-actions">${n ? `<button class="btn btn-primary btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
+  hydrateCovers(h); h.classList.toggle('nocover', !coverOf(c));
+  const cr = $('#colReel'); if (cr) cr.onclick = () => openReel(colItems(c), c.name);
+  renderGrid($('#colItems'), sortNew(colItems(c)), emptyHTML('cols', 'This collection is empty', 'Add photos and videos straight into it, or choose <b>Select</b> in your Library and tap <b>Add to</b>.', `<button class="btn btn-primary" data-act="import">${IC.plus}Add photos &amp; videos</button>`));
 }
 
 /* ---------- search ---------- */
@@ -418,7 +532,7 @@ function renderSearch() {
   const special = [['__fav', 'Favorites', 'star'], ['__photo', 'Photos', 'photo'], ['__video', 'Videos', 'film']];
   const aiT = aiTagCounts().slice(0, 16);
   $('#tags').innerHTML = special.concat(tags.map(t => [t, t, 'tag'])).concat(aiT.map(t => [t, t, 'spark', 'ai'])).map(([k, l, ic, cls]) => `<button class="tag ${cls || ''} ${activeTags.has(k) ? 'on' : ''}" data-tag="${esc(k)}" ${cls ? 'title="AI tag"' : ''}>${IC[ic]}${esc(l)}${activeTags.has(k) ? '<span class="x">×</span>' : ''}</button>`).join('') +
-    (tags.length || aiT.length ? '' : '<span style="color:var(--dim);font-size:13px;line-height:38px">Add tags to items (right-click or long-press → Edit) and they’ll appear here.</span>');
+    (tags.length || aiT.length ? '' : '<span class="hint-line">Tags you add (press and hold → Details) show up here.</span>');
   let sug = [];
   if (q) {
     sug = tags.filter(t => t.includes(q)).slice(0, 3).map(t => ({ k: 'tag', v: t }))
@@ -428,7 +542,7 @@ function renderSearch() {
   if (pOn) { People.people().forEach(p => { if (p.hidden || !p.name) return; People.itemsOf(p).forEach(id => names.set(id, (names.get(id) || '') + ' ' + p.name)); });
     if (q) sug = People.find(q).filter(p => !p.hidden && People.itemsOf(p, visibleId).length).slice(0, 3).map(p => ({ k: 'person', v: p.name, id: p.id })).concat(sug); }
   if (!pOn) $('#searchPeople').innerHTML = ''; else if (!q) renderPeopleRow('#searchPeople'); else $('#searchPeople').innerHTML = '';
-  $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span style="color:var(--dim);font-size:13px;line-height:36px">No suggestions yet</span>';
+  $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span class="hint-line">No suggestions yet</span>';
   const res = visible().filter(i => {
     const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + (i.aiTags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
@@ -439,7 +553,7 @@ function renderSearch() {
     return true;
   });
   $('#resH').textContent = (q || activeTags.size) ? `Results · ${res.length}` : `Everything · ${res.length}`;
-  renderGrid($('#results'), sortNew(res), `<div class="empty"><b>No matches</b>Try another word or clear a tag.</div>`);
+  renderGrid($('#results'), sortNew(res), emptyHTML('search', q || activeTags.size ? 'No results' : 'Nothing to search yet', q || activeTags.size ? 'Try another word, or clear a tag.' : 'Import photos and videos, then find them here by name, tag, place or person.'));
   const tok = ++smartTok;
   if (q.length >= 3 && aiOn() && AI.hasIndex()) {
     const ids = visible().filter(i => [...activeTags].every(t => t === '__fav' ? i.fav : t === '__photo' ? i.type === 'photo' : t === '__video' ? i.type === 'video' : hasTag(i, t))).map(i => i.id);
@@ -451,7 +565,7 @@ function renderSearch() {
       const extra = hits.filter(([id]) => !seen.has(id)).map(([id]) => itemById(id)).filter(Boolean);
       const all = textHits.concat(extra);
       $('#resH').innerHTML = `Results · ${all.length}${extra.length ? ` <span class="ai-pill">${IC.spark}${extra.length} smart match${extra.length > 1 ? 'es' : ''}</span>` : ''}`;
-      renderGrid($('#results'), all, `<div class="empty"><b>No matches</b>Try another word or clear a tag.</div>`);
+      renderGrid($('#results'), all, emptyHTML('search', 'No results', 'Try another word, or clear a tag.'));
       hydrateIcons($('#resH'));
     }).catch(e => { if (tok === smartTok) { console.warn('smart search', e); $('#resH').textContent = `Results · ${res.length}`; } }); }, 250);
   }
@@ -465,24 +579,31 @@ $('#suggest').addEventListener('click', e => { const c = e.target.closest('.chip
 function renderVault() {
   const body = $('#vaultBody'); const pin = idx.settings.vaultPin;
   if (pin && !vaultOpen) {
-    body.innerHTML = `<div class="gate" style="margin:10px auto 0"><p class="sub">Enter your vault PIN</p><input class="pass" id="vpin" type="password" inputmode="numeric" autocomplete="off" placeholder="Vault PIN"><div class="err" id="vErr"></div><button class="btn btn-primary" id="vGo">Open vault</button></div>`;
+    body.innerHTML = `<div class="gate vgate"><span class="eic">${IC.vault}</span><p class="sub">The Vault has its own PIN</p><input class="pass" id="vpin" type="password" inputmode="numeric" autocomplete="off" placeholder="Vault PIN" aria-label="Vault PIN" enterkeyhint="go"><div class="err" id="vErr" role="alert"></div><button class="btn btn-primary" id="vGo">Open Vault</button></div>`;
     const go = async () => {
       const v = $('#vpin').value; const h = await Store.vaultHash(v, pin.salt);
-      if (h.hash === pin.hash) { vaultOpen = true; renderVault(); } else { $('#vErr').textContent = 'Wrong PIN.'; $('#vpin').value = ''; $('#vpin').classList.add('shake'); setTimeout(() => $('#vpin').classList.remove('shake'), 500); }
+      if (h.hash === pin.hash) { vaultOpen = true; renderVault(); updNav(); } else { UI.haptic('warn'); $('#vErr').textContent = 'Wrong PIN.'; $('#vpin').value = ''; $('#vpin').classList.add('shake'); setTimeout(() => $('#vpin').classList.remove('shake'), 500); }
     };
     $('#vGo').onclick = go; $('#vpin').onkeydown = e => { if (e.key === 'Enter') go(); }; return;
   }
   const items = sortNew(idx.items.filter(i => i.vault && !i.archived));
-  body.innerHTML = `<div class="toolrow" style="justify-content:center"><div class="tools"><button class="btn btn-ghost btn-sm" id="vReveal">${IC.eye}<span>Reveal all</span></button><button class="btn btn-ghost btn-sm" data-act="select">${IC.check}<span>Select</span></button>${pin ? `<button class="btn btn-ghost btn-sm" id="vClose">${IC.lock}<span>Close vault</span></button>` : ''}</div></div>
-    <div class="grid" id="vaultGrid"></div><div class="pill">${IC.lock}Encrypted on device</div>
-    <p class="demo-note" style="text-align:center">Vault items are hidden from Library, Collections and Search. Tap once to reveal, again to open.${pin ? '' : ' Add a separate vault PIN in Profile for a second layer.'}</p>`;
+  body.innerHTML = `${items.length ? `<div class="toolrow vtools"><button class="txtbtn" id="vReveal">${IC.eye}<span>Show all</span></button>${pin ? `<button class="txtbtn" id="vClose">${IC.lock}<span>Lock Vault</span></button>` : ''}</div>` : ''}
+    <div class="grid" id="vaultGrid"></div>
+    <p class="foot-note">Tap once to reveal, tap again to open.${pin ? '' : ' For a second lock, add a Vault PIN in Profile.'}</p>`;
   const g = $('#vaultGrid'); if (!g._bound) { bindGrid(g); g._bound = 1; }
-  renderGrid(g, items, `<div class="empty"><b>Your vault is empty</b>Use <i>Select</i> in the Library (or an item’s ⋯ menu) and choose “Move to Vault”.</div>`, { veiled: true });
-  $('#vReveal').onclick = () => $$('#vaultGrid .tile').forEach(t => t.classList.add('revealed'));
-  if (pin) $('#vClose').onclick = () => { vaultOpen = false; renderVault(); };
+  renderGrid(g, items, emptyHTML('vault', 'The Vault is empty', 'Press and hold anything in your Library and tap <b>Move to Vault</b>. It disappears from everywhere else until you move it back.'), { veiled: true });
+  const vr = $('#vReveal'); if (vr) vr.onclick = () => $$('#vaultGrid .tile').forEach(t => t.classList.add('revealed'));
+  const vc = $('#vClose'); if (vc) vc.onclick = () => { vaultOpen = false; renderVault(); updNav(); };
 }
 
 /* ---------- profile & settings ---------- */
+/* Profile & settings (v1.5): inset grouped lists, one plain-language line per setting, whole rows are tap targets */
+const ROW = o => { const tag = o.id && o.tap ? 'button' : 'div';
+  return `<${tag} class="row${o.tap ? ' tap' : ''}${o.cls ? ' ' + o.cls : ''}"${o.id ? ` id="${o.id}"` : ''}${o.attr ? ' ' + o.attr : ''}>${o.ic ? `<span class="ri" style="--c:${o.c || '#FF2E88'}">${IC[o.ic]}</span>` : ''}<span class="meta"><span class="mt">${o.t}</span>${o.d != null ? `<small${o.did ? ` id="${o.did}"` : ''}>${o.d}</small>` : ''}</span>${o.right || ''}${o.tap ? `<span class="chev">${IC.chev}</span>` : ''}</${tag}>`; };
+const GROUP = (title, rows, extra = '') => `${title ? `<h4 class="gh">${title}</h4>` : ''}<div class="card rows grp"${extra}>${rows.filter(Boolean).join('')}</div>`;
+const SW = (key, on, label) => `<button class="switch" role="switch" data-key="${key}" aria-checked="${!!on}" aria-label="${label}"></button>`;
+const TS = [['auto', 'Auto'], ['s', 'A'], ['m', 'A'], ['l', 'A'], ['xl', 'A']];
+function applyTextSize() { let t = 'auto'; try { t = (idx && idx.settings.textSize) || localStorage.getItem('velvet.ts') || 'auto'; } catch (e) { } document.documentElement.dataset.ts = t; document.documentElement.classList.toggle('ios', isIOS); }
 async function renderProfile() {
   const s = idx.settings, items = idx.items;
   const photos = items.filter(i => i.type === 'photo').length, videos = items.filter(i => i.type === 'video').length, vaultN = items.filter(i => i.vault).length;
@@ -494,49 +615,51 @@ async function renderProfile() {
   const quota = free != null ? libBytes + free : (est.quota || 0);
   const frac = quota ? Math.min(1, libBytes / quota) : 0;
   const [num, unit] = bytes(libBytes).split(' ');
-  $('#profileBody').innerHTML = `<div class="eyebrow">Profile &amp; storage</div><div class="script">Velvet</div>
-    <div class="ring-wrap"><svg viewBox="0 0 200 200"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7AB4"/><stop offset=".5" stop-color="#FF2E88"/><stop offset="1" stop-color="#C2185B"/></linearGradient></defs><circle class="ring-bg" cx="100" cy="100" r="86"/><circle class="ring-fg" id="ring" cx="100" cy="100" r="86"/></svg>
-      <div class="ring-label"><b>${num}<small>${unit}</small></b><span>${quota ? 'of ' + bytes(quota) + (free != null ? ' (disk)' : ' available') : 'used'}</span><span data-ic="lockSm"></span></div></div>
-    <div class="stat-grid"><div class="stat"><b>${photos}</b><span>Photos</span></div><div class="stat"><b>${videos}</b><span>Videos</span></div><div class="stat"><b>${vaultN}</b><span>In vault</span></div></div>
-    <div class="card rows">
-      <div class="row">${IC.disk}<div class="meta">Library size<small>Encrypted data on this device</small></div><span class="v">${bytes(libBytes)}</span></div>
-      <div class="row">${IC.bolt}<div class="meta">${free != null ? 'Free disk space' : 'Browser storage used'}<small>${free != null ? 'On the drive that holds Velvet' : 'Velvet + app files (estimate)'}</small></div><span class="v">${free != null ? bytes(free) : bytes(est.usage || 0)}</span></div>
-      ${!host ? `<div class="row">${IC.shield}<div class="meta">Protected from cleanup<small>${persisted ? 'Storage marked persistent' : 'Not guaranteed — see tip below'}</small></div><span class="v">${persisted ? 'Yes' : 'No'}</span></div>` : ''}
-    </div>
-    <div class="card rows">
-      <div class="row"><div class="meta">Auto-lock<small>Lock after inactivity</small></div><select id="alMin">${[1, 2, 5, 10, 30].map(m => `<option value="${m}" ${s.autolockMin == m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button class="switch" role="switch" data-key="autolock" aria-checked="${s.autolock}" aria-label="Auto-lock"></button></div>
-      <div class="row"><div class="meta">Lock when hidden<small>Lock as soon as you switch apps or minimise</small></div><button class="switch" role="switch" data-key="lockOnHide" aria-checked="${s.lockOnHide}" aria-label="Lock when hidden"></button></div>
-      <div class="row"><div class="meta">Video chapters<small>Find scenes automatically when you open a video (on this device)</small></div><button class="switch" role="switch" data-key="autoChapters" aria-checked="${s.autoChapters !== false}" aria-label="Video chapters"></button></div>
-      <div class="row"><div class="meta">Hide from recents<small>Blur Velvet when it loses focus</small></div><button class="switch" role="switch" data-key="hide" aria-checked="${s.hide}" aria-label="Hide from recents"></button></div>
-      <div class="row"><div class="meta">Vault PIN<small>${s.vaultPin ? 'On: vault asks for a second PIN' : 'Off: vault opens with your passcode session'}</small></div><button class="btn btn-ghost btn-sm" id="vpinBtn">${s.vaultPin ? 'Change / remove' : 'Set PIN'}</button></div>
-      <div class="row"><div class="meta">Passcode<small>Re-wraps your key; files aren’t re-encrypted</small></div><button class="btn btn-ghost btn-sm" id="chPass">Change</button></div>
-    </div>
-    ${aiCard()}
-    <div class="card rows">
-      <div class="row">${IC.download}<div class="meta">Back up library<small>One encrypted .velvet file. Move it to another device and restore.</small></div><button class="btn btn-primary btn-sm" id="bkBtn">Export</button></div>
-      <div class="row">${IC.upload}<div class="meta">Restore from backup<small>Replaces the library on this device</small></div><button class="btn btn-ghost btn-sm" id="rsBtn">Restore</button></div>
-      ${host ? `<div class="row">${IC.folder}<div class="meta">Data folder<small>Where Velvet keeps its encrypted data</small></div><button class="btn btn-ghost btn-sm" id="dataBtn">Open</button></div>` : ''}
-      <div class="row">${IC.user}<div class="meta">Version<small id="verInfo">${APP_VER}</small></div>${!host && 'serviceWorker' in navigator ? '<button class="btn btn-ghost btn-sm" id="repairBtn">Reload app files</button>' : ''}</div>
-      <div class="row">${IC.spark}<div class="meta">Preview diagnostics<small id="pvSum">${pvSummary()}</small></div><button class="btn btn-ghost btn-sm" id="pvBtn">View</button></div>
-      <div class="row">${IC.photo}<div class="meta">Regenerate previews<small>Rebuild thumbnails for everything already in Velvet</small></div><button class="btn btn-ghost btn-sm" id="regenBtn">Rebuild</button></div>
-      <div class="row">${IC.trash}<div class="meta">Erase everything<small>Deletes the passcode and every file in Velvet</small></div><button class="btn btn-danger btn-sm" id="wipeBtn">Erase</button></div>
-    </div>
-    ${!host && isIOS && !standalone ? `<div class="install-tip"><b>Install Velvet:</b> tap the Share button, then <b>Add to Home Screen</b>. Safari can clear data from websites you haven’t opened for a while. Installed apps are much safer, and you should still export a backup now and then.</div>` : ''}
+  const ts = s.textSize || 'auto';
+  $('#profileBody').innerHTML = `
+    <div class="card storage"><div class="ring-wrap"><svg viewBox="0 0 200 200"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7AB4"/><stop offset=".5" stop-color="#FF2E88"/><stop offset="1" stop-color="#C2185B"/></linearGradient></defs><circle class="ring-bg" cx="100" cy="100" r="86"/><circle class="ring-fg" id="ring" cx="100" cy="100" r="86"/></svg>
+      <div class="ring-label"><b>${num}<small>${unit}</small></b><span>used</span></div></div>
+      <div class="stat-grid"><div class="stat"><b>${photos}</b><span>Photos</span></div><div class="stat"><b>${videos}</b><span>Videos</span></div><div class="stat"><b>${vaultN}</b><span>In Vault</span></div><div class="stat"><b>${quota ? bytes(Math.max(0, quota - libBytes)) : '—'}</b><span>${free != null ? 'Free on disk' : 'Space left'}</span></div></div>
+      <p class="store-note">${IC.lock}Encrypted on ${dev}${!host ? ` · ${persisted ? 'protected from browser cleanup' : 'not protected from browser cleanup yet'}` : ''}</p></div>
+    ${GROUP('Privacy & lock', [
+      ROW({ ic: 'lock', t: 'Auto-lock', d: 'Locks Velvet when you haven’t used it for a while', right: `<select id="alMin" aria-label="Lock after">${[1, 2, 5, 10, 30].map(m => `<option value="${m}" ${s.autolockMin == m ? 'selected' : ''}>${m} min</option>`).join('')}</select>${SW('autolock', s.autolock, 'Auto-lock')}` }),
+      ROW({ ic: 'open', c: '#E0567A', t: 'Lock when I leave', d: 'Locks the moment you switch apps', right: SW('lockOnHide', s.lockOnHide, 'Lock when I leave') }),
+      ROW({ ic: 'eye', c: '#C2185B', t: 'Hide in app switcher', d: 'Blurs Velvet in the recent-apps view', right: SW('hide', s.hide, 'Hide in app switcher') }),
+      ROW({ ic: 'vault', c: '#A3123F', t: 'Vault PIN', d: s.vaultPin ? 'On. The Vault asks for its own PIN' : 'Off. Add a second lock for the Vault', id: 'vpinBtn', tap: 1, right: `<span class="v">${s.vaultPin ? 'On' : 'Off'}</span>` }),
+      ROW({ ic: 'key', c: '#8E3A6E', t: 'Change passcode', d: 'Your files stay encrypted. Only the key changes', id: 'chPass', tap: 1 })])}
+    <h4 class="gh">Smart features · on this device</h4>${aiCard()}
+    ${GROUP('Videos', [ROW({ ic: 'chap', t: 'Find chapters automatically', d: 'Marks scene changes when you open a video', right: SW('autoChapters', s.autoChapters !== false, 'Find chapters automatically') })])}
+    ${GROUP('Backup', [
+      ROW({ ic: 'download', c: '#2E9E6B', t: 'Back up now', d: 'Saves one encrypted .velvet file. Restore it on any device with your passcode', id: 'bkBtn', tap: 1 }),
+      ROW({ ic: 'upload', c: '#3B7FD1', t: 'Restore from a backup', d: 'Replaces everything in Velvet on this device', id: 'rsBtn', tap: 1 }),
+      host ? ROW({ ic: 'folder', c: '#C47A2C', t: 'Data folder', d: 'Where Velvet keeps its encrypted files', id: 'dataBtn', tap: 1 }) : ''])}
+    ${GROUP('Display', [
+      ROW({ ic: 'text', c: '#7A4FD1', t: 'Text size', d: ts === 'auto' ? (isIOS ? 'Follows your iPhone’s text size' : 'Standard size') : 'Larger or smaller text everywhere', cls: 'stack', right: `<div class="chips seg mini" id="tsSeg" role="radiogroup" aria-label="Text size">${TS.map(([k, l], i) => `<button class="chip ts-${k} ${ts === k ? 'on' : ''}" data-ts="${k}" role="radio" aria-checked="${ts === k}" aria-label="${k === 'auto' ? 'Automatic' : ['', 'Small', 'Medium', 'Large', 'Extra large'][i]}">${l}</button>`).join('')}</div>` }),
+      ROW({ ic: 'shape', c: '#B3123E', t: 'Show whole photos', d: 'Off: tidy square tiles, like Photos. On: every shape uncropped', right: `<button class="switch" role="switch" id="fitSw" aria-checked="${gridPref().fit}" aria-label="Show whole photos"></button>` })])}
+    ${GROUP('Help', [
+      ROW({ ic: 'help', c: '#3B7FD1', t: 'How Velvet works', d: 'A 3-step tour', id: 'tourBtn', tap: 1 }),
+      ROW({ ic: 'spark', c: '#C47A2C', t: 'Preview diagnostics', d: pvSummary(), did: 'pvSum', id: 'pvBtn', tap: 1 }),
+      ROW({ ic: 'photo', c: '#2E9E6B', t: 'Rebuild previews', d: 'Makes new thumbnails for everything. Your files don’t change', id: 'regenBtn', tap: 1 }),
+      ROW({ ic: 'info', c: '#7E5763', t: 'Version', d: APP_VER, did: 'verInfo', right: !host && 'serviceWorker' in navigator ? '<button class="btn btn-ghost btn-sm" id="repairBtn">Reload app</button>' : '' })])}
+    ${GROUP('', [ROW({ ic: 'trash', c: '#E0245E', t: 'Erase everything', d: 'Deletes your passcode and every file in Velvet', id: 'wipeBtn', tap: 1, cls: 'danger' })])}
+    ${!host && isIOS && !standalone ? `<div class="install-tip"><b>Add Velvet to your Home Screen.</b> Tap Share, then <b>Add to Home Screen</b>. Safari can clear data from websites you haven’t opened for a while; Home Screen apps are much safer. Still, make a backup now and then.</div>` : ''}
     ${!host && !isIOS && !persisted ? `<div class="install-tip">Install Velvet from your browser’s menu (Install app) so the browser keeps your library safe from automatic cleanup.</div>` : ''}
-    <p class="sub-note">Forgot your passcode? There is no recovery. Your files are encrypted with it, so keep a backup and remember the passcode.</p>
-    <div style="margin-top:16px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap"><button class="btn btn-primary" data-act="import">${IC.plus}Import media</button><button class="btn btn-ghost" data-act="lock">${IC.lock}Lock now</button></div>`;
+    <p class="sub-note">Forgot your passcode? There’s no way to recover it. That’s what keeps your files private, so keep a backup and remember your passcode.</p>`;
   hydrateIcons($('#profileBody'));
   const ring = $('#ring'), RC = 2 * Math.PI * 86; ring.style.strokeDasharray = RC; ring.style.strokeDashoffset = RC;
   requestAnimationFrame(() => requestAnimationFrame(() => { ring.style.strokeDashoffset = RC * (1 - Math.max(frac, libBytes ? 0.02 : 0)); }));
-  $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if (k === 'autoChapters' && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask' }[k]); });
+  $$('#profileBody .switch[data-key]').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if (k === 'autoChapters' && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); UI.haptic(); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when you leave' : 'Lock-when-I-leave off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
+  $('#fitSw').onclick = async () => { const g = s.grid = s.grid || {}; g.fit = !g.fit; g.zoom = 0; $('#fitSw').setAttribute('aria-checked', String(g.fit)); UI.haptic(); await save(); toast(g.fit ? 'Showing whole photos' : 'Showing square tiles'); };
+  $('#tsSeg').onclick = e => { const b = e.target.closest('[data-ts]'); if (!b) return; s.textSize = b.dataset.ts; try { localStorage.setItem('velvet.ts', s.textSize); } catch (er) { } applyTextSize(); save(); UI.haptic(); renderProfile(); };
+  $('#tourBtn').onclick = showTour;
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
   bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#pvBtn').onclick = previewDiagnostics; const rpb = $('#repairBtn'); if (rpb) rpb.onclick = repairAppFiles; renderEnvCard(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
 async function vaultPinFlow() {
   const s = idx.settings;
   if (s.vaultPin) {
-    const r = await modal(`<h3>Vault PIN</h3><div class="menu"><button data-r="change">${IC.key}Change PIN</button><button class="danger" data-r="remove">${IC.trash}Remove PIN</button></div><div class="actions"><button class="btn btn-ghost" data-r="">Close</button></div>`);
+    const r = await actionSheet('Vault PIN', [{ r: 'change', label: 'Change PIN', ic: 'key' }, { r: 'remove', label: 'Remove PIN', ic: 'trash', danger: true }]);
     if (r === 'remove') { s.vaultPin = null; vaultOpen = false; await save(); renderProfile(); toast('Vault PIN removed'); return; }
     if (r !== 'change') return;
   }
@@ -574,7 +697,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.4.1';
+const APP_VER = '1.5.0';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -672,17 +795,17 @@ async function startAI() {
   if (peopleOn() && idx && Store.isUnlocked() && !AI.isRunning()) startPeople();
 }
 function aiCard() {
-  const on = aiOn(), st = AI.stats(idx);
-  return `<div class="card rows" id="aiCard">
-    <div class="row">${IC.spark}<div class="meta">On-device AI<small>Smart search, auto-tags and duplicate finder. Runs only on this device. Nothing is uploaded.</small></div><button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button></div>
-    ${on ? `<div class="row"><div class="meta">Index library<small id="aiStatus">${aiStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button></div>
-    <div class="row"><div class="meta">Duplicates &amp; similar<small>Review look-alikes side by side and keep the best</small></div><button class="btn btn-ghost btn-sm" id="aiDup">Review</button></div>
-    <div class="row"><div class="meta">Best shots<small>Pick the best of bursts and look-alikes, archive the rest</small></div><button class="btn btn-ghost btn-sm" id="aiBest">Review</button></div>
-    <div class="row"><div class="meta">Hidden auto albums<small>${Object.keys(idx.settings.smartHidden || {}).length ? Object.keys(idx.settings.smartHidden).length + ' hidden or saved as collections' : 'None. Hide an auto album from its ••• menu'}</small></div><button class="btn btn-ghost btn-sm" id="aiHid">Show hidden</button></div>
-    <div class="row"><div class="meta">Smart rules<small>${(idx.settings.rules || []).length ? (idx.settings.rules || []).filter(r => r.on).length + ' active · auto-move items by tag, AI search or person' : 'Auto-move items by tag, AI search or person into the Vault or a collection'}</small></div><button class="btn btn-ghost btn-sm" id="aiRules">Manage</button></div>
+  const on = aiOn(), st = AI.stats(idx), nh = Object.keys(idx.settings.smartHidden || {}).length, nr = (idx.settings.rules || []).length, na = idx.items.filter(i => i.archived).length;
+  return `<div class="card rows grp" id="aiCard">
+    ${ROW({ ic: 'spark', t: 'On-device AI', d: 'Smart search, auto albums and a duplicate finder. Runs only on this device; nothing is uploaded', right: `<button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button>` })}
+    ${on ? `${ROW({ ic: 'bolt', c: '#C47A2C', t: 'Indexing', d: aiStatusText(), did: 'aiStatus', right: `<button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button>` })}
+    ${ROW({ ic: 'image', c: '#3B7FD1', t: 'Duplicates & look-alikes', d: 'Review them side by side and keep the best', id: 'aiDup', tap: 1 })}
+    ${ROW({ ic: 'star', c: '#D4A017', t: 'Best shots', d: 'Keep the best of each burst, tuck the rest away', id: 'aiBest', tap: 1 })}
+    ${ROW({ ic: 'sliders', c: '#2E9E6B', t: 'Smart rules', d: nr ? `${(idx.settings.rules || []).filter(r => r.on).length} on · move things automatically by tag, look or person` : 'Move things automatically by tag, look or person', id: 'aiRules', tap: 1 })}
+    ${ROW({ ic: 'eye', c: '#7E5763', t: 'Hidden auto albums', d: nh ? `${nh} hidden or saved as collections` : 'None. Hide an auto album from its ••• menu', id: 'aiHid', tap: 1 })}
     ${peopleCardRows()}
-    <div class="row"><div class="meta">AI data<small>Encrypted on this device. AI model ≈ ${AI.MODEL_MB} MB, downloaded once and works offline.</small></div><span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe" style="margin-left:8px">Remove</button></div>` : ''}
-    ${idx.items.some(i => i.archived) ? `<div class="row"><div class="meta">Archive<small>Hidden extras kept encrypted on this device</small></div><span class="v">${idx.items.filter(i => i.archived).length}</span><button class="btn btn-ghost btn-sm" id="aiArch" style="margin-left:8px">Open</button></div>` : ''}
+    ${ROW({ ic: 'disk', c: '#7E5763', t: 'AI data', d: `Encrypted on this device. Model ≈ ${AI.MODEL_MB} MB, downloaded once`, right: `<span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe">Remove</button>` })}` : ''}
+    ${na ? ROW({ ic: 'folder', c: '#7E5763', t: 'Archive', d: 'Extras you tucked away, still encrypted here', id: 'aiArch', tap: 1, right: `<span class="v">${na}</span>` }) : ''}
   </div>`;
 }
 function bindAICard() {
@@ -725,8 +848,8 @@ function bindPeople(root) { hydrateCovers(root); root.querySelectorAll('[data-pe
 function peopleRowHTML(title) {
   if (!peopleOn() || !People.isOpen()) return '';
   const L = peopleList().slice(0, 14);
-  if (!L.length) return `<div class="sub-h smart-h">${IC.people}People</div><div class="smart-empty">${IC.people}<span>${People.isRunning() || (pplProg && pplProg.phase === 'indexing') ? 'Finding faces on this device…' : 'People appear here when someone shows up in at least two photos or videos.'}</span></div>`;
-  return `<div class="sub-h smart-h people-h">${IC.people}${title}<button class="btn btn-ghost btn-sm" data-nav="people">See all</button></div><div class="prow">${L.map(personCard).join('')}</div>`;
+  if (!L.length) return `<div class="sub-h smart-h">${IC.people}People</div><div class="smart-empty">${IC.people}<span>${People.isRunning() || (pplProg && pplProg.phase === 'indexing') ? 'Finding faces on this device…' : 'People show up here once someone appears in at least two photos or videos.'}</span></div>`;
+  return `<div class="sub-h smart-h people-h">${IC.people}${title}<button class="txtbtn" data-nav="people">See all</button></div><div class="prow">${L.map(personCard).join('')}</div>`;
 }
 async function renderPeopleRow(sel) {
   const el = $(sel); if (!el) return;
@@ -740,7 +863,7 @@ function renderPeople() {
   if (!People.isOpen()) { People.open(idx).then(() => view === 'people' && renderPeople()); body.innerHTML = '<div class="lb-loading" style="margin:40px auto"></div>'; return; }
   const all = peopleList({ hidden: true }), L = all.filter(x => showHiddenPeople || !x.p.hidden), nh = all.filter(x => x.p.hidden).length, st = People.stats(idx);
   body.innerHTML = `<div class="section-title"><h2>People</h2><span>${L.length} ${L.length === 1 ? 'person' : 'people'}</span></div>
-    <p class="sub-note">Faces are found and grouped on this device. Names and face data are encrypted and never leave it. ${People.isRunning() ? `Finding faces… ${pplProg && pplProg.total ? `${pplProg.done}/${pplProg.total}` : ''}` : `${st.faces} faces in ${st.indexed} of ${st.total} items`}</p>
+    <p class="sub-note">Faces are found and grouped on this device. Names and face data are encrypted and never leave it. ${People.isRunning() ? `Finding faces… ${pplProg && pplProg.total ? `${pplProg.done}/${pplProg.total}` : ''}` : `${st.faces} faces in ${st.indexed} of ${st.total} items.`} Tap someone to name them.</p>
     ${nh ? `<div class="dact top"><button class="btn btn-ghost btn-sm" id="pplHidden">${showHiddenPeople ? 'Hide hidden people' : `Show hidden (${nh})`}</button></div>` : ''}
     <div class="pgrid">${L.map(personCard).join('') || `<div class="empty"><b>No people yet</b>People appear when someone shows up in at least two photos or videos.</div>`}</div>`;
   bindPeople(body); hydrateIcons(body);
@@ -754,15 +877,15 @@ function renderPerson() {
   const p = People.person(curPerson); if (!p) { nav('people'); return; }
   const items = People.itemsOf(p, visibleId).map(itemById), cv = People.cover(p, visibleId);
   const faces = p.faces.map(People.faceInfo).filter(f => f && visibleId(f.itemId));
-  body.innerHTML = `<div class="phero">${faceHTML(cv, 'big')}<div class="pmeta"><h2 id="pName" class="${p.name ? '' : 'unnamed'}">${esc(p.name || 'Add a name')}</h2><p>${items.length} item${items.length === 1 ? '' : 's'} · ${faces.length} face${faces.length === 1 ? '' : 's'}${p.hidden ? ' · hidden' : ''}</p>
-      <div class="pact"><button class="btn btn-primary btn-sm" id="pRen">${IC.edit || IC.tag}<span>${p.name ? 'Rename' : 'Name'}</span></button><button class="btn btn-ghost btn-sm" id="pMerge">${IC.people}<span>Merge…</span></button>
-      <button class="btn btn-ghost btn-sm" id="pReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="pRule">${IC.vault}<span>Auto-move…</span></button><button class="btn btn-ghost btn-sm" id="pHide">${p.hidden ? 'Unhide' : 'Hide'}</button></div></div></div>
-    <div class="sub-h">Faces<span class="sub-hint">Tap faces that aren’t ${esc(p.name || 'this person')} to fix the group</span></div>
+  body.innerHTML = `<div class="phero"><div class="pring">${faceHTML(cv, 'big')}</div><div class="pmeta"><h2 id="pName" class="${p.name ? '' : 'unnamed'}" role="button" tabindex="0">${esc(p.name || 'Add a name')}</h2><p>${plural(items.length, 'item')} · ${plural(faces.length, 'face')}${p.hidden ? ' · hidden' : ''}</p></div>
+      <div class="pact"><button class="pa on" id="pReel">${IC.reel}<span>Highlights</span></button><button class="pa" id="pRen">${IC.edit}<span>${p.name ? 'Rename' : 'Name'}</span></button>
+      <button class="pa" id="pRule">${IC.vault}<span>Auto-move</span></button><button class="pa" id="pMerge">${IC.people}<span>Merge</span></button><button class="pa" id="pHide">${IC.eye}<span>${p.hidden ? 'Unhide' : 'Hide'}</span></button></div></div>
+    <div class="sub-h">Faces<span class="sub-hint">Tap any face that isn’t ${esc(p.name || 'this person')}</span></div>
     <div class="frow" id="pFaces">${faces.map(f => `<button class="fpick" data-fk="${esc(f.key)}" title="${esc((itemById(f.itemId) || {}).title || '')}">${faceHTML(f)}<i>${IC.check}</i></button>`).join('')}</div>
     <div class="dact top fbar" id="pFbar"><span id="pSel">0 selected</span><button class="btn btn-ghost btn-sm" id="pNot">Not ${esc(p.name || 'this person')}</button><button class="btn btn-ghost btn-sm" id="pSplit">Move to new person</button><button class="btn btn-ghost btn-sm" id="pMove">Move to…</button></div>
     <div class="sub-h">Photos &amp; videos</div><div class="grid" id="personGrid"></div>`;
   hydrateIcons(body); hydrateCovers(body); bindGrid($('#personGrid'));
-  renderGrid($('#personGrid'), sortNew(items), `<div class="empty"><b>Nothing to show</b>Their photos may be in the Vault or archived.</div>`);
+  renderGrid($('#personGrid'), sortNew(items), emptyHTML('people', 'Nothing to show', 'Their photos may be in the Vault or the Archive.'));
   const picked = () => [...body.querySelectorAll('.fpick.on')].map(b => b.dataset.fk);
   const upd = () => { const n = picked().length; $('#pSel').textContent = `${n} selected`; $('#pFbar').classList.toggle('show', n > 0); };
   body.querySelectorAll('.fpick').forEach(b => b.onclick = () => { b.classList.toggle('on'); upd(); });
@@ -802,9 +925,9 @@ async function startPeople() {
 }
 function peopleCardRows() {
   const on = People.on(idx), st = People.isOpen() ? People.stats(idx) : null;
-  return `<div class="row">${IC.people}<div class="meta">People<small>Group faces into people, name them and search by name. Face data is encrypted and stays on this device.</small></div><button class="switch" role="switch" id="pplSw" aria-checked="${on}" aria-label="People"></button></div>
-    ${on ? `<div class="row"><div class="meta">Faces<small id="pplStatus">${pplStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="pplOpen">Open</button></div>
-    <div class="row"><div class="meta">People data<small>Encrypted on this device. Face models ≈ ${People.MODEL_MB} MB, downloaded once.</small></div><span class="v">${bytes((st && st.bytes) || (idx.settings.faces && idx.settings.faces.file && idx.settings.faces.file.stored) || 0)}</span><button class="btn btn-ghost btn-sm" id="pplWipe" style="margin-left:8px">Remove</button></div>` : ''}`;
+  return `${ROW({ ic: 'people', c: '#E0567A', t: 'People', d: 'Groups faces so you can name people and search by name. Face data stays encrypted here', right: `<button class="switch" role="switch" id="pplSw" aria-checked="${on}" aria-label="People"></button>` })}
+    ${on ? `${ROW({ ic: 'user', c: '#E0567A', t: 'Faces', d: pplStatusText(), did: 'pplStatus', id: 'pplOpen', tap: 1 })}
+    ${ROW({ ic: 'disk', c: '#7E5763', t: 'People data', d: `Encrypted on this device. Face models ≈ ${People.MODEL_MB} MB`, right: `<span class="v">${bytes((st && st.bytes) || (idx.settings.faces && idx.settings.faces.file && idx.settings.faces.file.stored) || 0)}</span><button class="btn btn-ghost btn-sm" id="pplWipe">Remove</button>` })}` : ''}`;
 }
 function bindPeopleCard() {
   const sw = $('#pplSw'); if (!sw) return;
@@ -875,7 +998,7 @@ async function renderEnvCard() {
   const f = await envFlags(); if (view !== 'profile' || !$('#profileBody')) return;
   const ver = $('#verInfo'); if (ver) ver.textContent = `${APP_VER} · ${host ? 'Windows app' : (f.swVer || 'no offline cache')}${f.standalone ? ' · Home Screen app' : ''}`;
   const w = envWarnings(f), old = $('#envCard'); if (old) old.remove(); if (!w.length) return;
-  $('#profileBody').insertAdjacentHTML('afterbegin', `<div class="card env-card" id="envCard">${w.map(([t, d]) => `<div class="env-w">${IC.spark}<div><b>${t}</b><p>${d}</p></div></div>`).join('')}</div>`);
+  const stc = $('#profileBody .storage'); (stc || $('#profileBody')).insertAdjacentHTML(stc ? 'afterend' : 'afterbegin', `<div class="card env-card" id="envCard">${w.map(([t, d]) => `<div class="env-w">${IC.spark}<div><b>${t}</b><p>${d}</p></div></div>`).join('')}</div>`);
 }
 async function repairAppFiles() {
   if (!(await confirmBox('Reload app files?', 'Velvet will clear its cached app code (not your photos, videos or AI models) and reload the latest version. You’ll need your passcode again.', 'Reload'))) return;
@@ -886,7 +1009,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v8';
+const SW_VER = 'velvet-v9';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -959,7 +1082,7 @@ async function renderDupes() {
     ${st.indexed < st.total ? `<p class="sub-note">Still indexing (${st.total - st.indexed} to go). More groups may appear.</p>` : ''}
     ${g.dupes.length ? `<h3 class="dsec">Duplicates</h3>` + g.dupes.map((ids, i) => card(ids, 'd', i)).join('') : ''}
     ${g.similar.length ? `<h3 class="dsec">Similar</h3>` + g.similar.map((ids, i) => card(ids, 's', i)).join('') : ''}
-    ${!g.dupes.length && !g.similar.length ? `<div class="empty"><b>No duplicates found</b>Nothing in your library looks the same.</div>` : ''}`;
+    ${!g.dupes.length && !g.similar.length ? emptyHTML('check', 'No duplicates', 'Nothing in your library looks the same. Nice and tidy.') : ''}`;
   hydrateCovers(body); hydrateIcons(body);
   body.querySelectorAll('input[data-del]').forEach(cb => cb.onchange = () => { const t = cb.closest('.dtile'); t.classList.toggle('keep', !cb.checked); t.querySelector('.kb').textContent = cb.checked ? 'Delete' : 'Keep'; });
   body.querySelectorAll('[data-delg]').forEach(b => b.onclick = async () => {
@@ -1025,20 +1148,41 @@ async function exportItem(it) {
   try { const b = await Store.readFile(it.id, it.chunks, it.mime, p => progress('Decrypting ' + it.title, p)); progress(null); await saveBlob(b, (it.title || 'velvet') + '.' + (it.ext || (it.type === 'video' ? 'mp4' : 'jpg'))); }
   catch (e) { progress(null); toast('Couldn’t export: ' + e.message); }
 }
-async function deleteItems(ids) {
+let pendingDel = [], delT = null;
+function flushDeletes() {
+  const L = pendingDel; pendingDel = []; clearTimeout(delT); delT = null;
+  L.forEach(it => { Store.deleteFile(it.id).catch(() => { }); if (it.thumb) Store.deleteFile(it.thumb.id).catch(() => { }); if (it.chap && it.chap.file) Store.deleteFile(it.chap.file.id).catch(() => { }); });
+  return L.length;
+}
+addEventListener('pagehide', () => flushDeletes());
+async function deleteItems(ids, opt = {}) {
   const n = ids.length; if (!n) return false;
-  if (!(await confirmBox(`Delete ${n === 1 ? 'this item' : n + ' items'}?`, 'They’ll be permanently removed from Velvet on this device. Originals elsewhere aren’t affected.', 'Delete', true))) return false;
+  if (!opt.noConfirm && !(await confirmBox(`Delete ${n === 1 ? 'this item' : n + ' items'}?`, 'They’ll be removed from Velvet on this device. Originals elsewhere aren’t affected. You can undo for a few seconds.', 'Delete', true))) return false;
+  const gone = [], covers = [];
   for (const id of ids) {
     const it = itemById(id); if (!it) continue;
-    await Store.deleteFile(id); if (it.thumb) await Store.deleteFile(it.thumb.id); if (it.chap && it.chap.file) await Store.deleteFile(it.chap.file.id).catch(() => { });
+    gone.push({ it, at: idx.items.indexOf(it) });
     if (thumbs.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); } if (fulls.has(id)) { URL.revokeObjectURL(fulls.get(id)); fulls.delete(id); }
-    idx.items = idx.items.filter(x => x.id !== id); idx.collections.forEach(c => { if (c.cover === id) c.cover = null; });
+    idx.items = idx.items.filter(x => x !== it); idx.collections.forEach(c => { if (c.cover === id) { c.cover = null; covers.push([c, id]); } });
   }
   AI.forget(ids); if (aiOn()) await AI.persist(idx).catch(() => { });
   if (People.isOpen()) { People.forget(ids); await People.persist(idx).catch(() => { }); }
-  await save(); render(); toast(`Deleted ${n} item${n === 1 ? '' : 's'}`); return true;
+  await save(); render(); UI.haptic('heavy');
+  const batch = gone.map(g => g.it); pendingDel.push(...batch); clearTimeout(delT); delT = setTimeout(flushDeletes, 7000);
+  toast(n === 1 ? 'Deleted' : `Deleted ${n} items`, 0, { undo: async () => {
+    if (!idx) return; const keep = new Set(batch); pendingDel = pendingDel.filter(x => !keep.has(x));
+    gone.sort((x, y) => x.at - y.at).forEach(g => idx.items.splice(Math.min(g.at, idx.items.length), 0, g.it)); covers.forEach(([c, id]) => { if (!c.cover) c.cover = id; });
+    await save(); render(); toast(n === 1 ? 'Restored' : `Restored ${n} items`);
+    if (aiOn()) setTimeout(() => startAI && startAI(), 400);
+    if (People.isOpen() && typeof startPeople === 'function') setTimeout(() => startPeople(), 600);
+  } });
+  return true;
 }
-function setVault(ids, on) { ids.forEach(id => { const it = itemById(id); if (it) it.vault = on; }); save(); render(); toast(on ? `Moved ${ids.length} to the Vault` : `Moved ${ids.length} back to the Library`); }
+function setVault(ids, on) {
+  const prev = ids.map(id => [itemById(id), !!(itemById(id) || {}).vault]).filter(x => x[0]);
+  ids.forEach(id => { const it = itemById(id); if (it) it.vault = on; }); save(); render();
+  toast(on ? `Moved ${plural(ids.length, 'item')} to the Vault` : `Moved ${plural(ids.length, 'item')} back to the Library`, 0, { undo: async () => { if (!idx) return; prev.forEach(([it, v]) => it.vault = v); await save(); render(); } });
+}
 async function addToCollections(ids) {
   if (!idx.collections.length) { const c = await newCollection(ids); return !!c; }
   const r = await modal(`<h3>Add to collection</h3><p>${ids.length} item${ids.length > 1 ? 's' : ''} selected</p><div class="clist">${idx.collections.map(c => `<label><input type="checkbox" value="${c.id}">${esc(c.name)}</label>`).join('')}</div>
@@ -1096,24 +1240,84 @@ function endSelect() { if (!selecting && !sel.size) return; selecting = false; s
 function togglePick(id, tile) { sel.has(id) ? sel.delete(id) : sel.add(id); tile.classList.toggle('picked', sel.has(id)); drawSelbar(); }
 function drawSelbar() {
   const b = $('#selbar'), n = sel.size, ids = [...sel];
-  b.innerHTML = `<span class="count">${n} selected</span><button data-s="all">${IC.check}All</button>
-    <button data-s="fav">${IC.heart}Favorite</button><button data-s="reel">${IC.reel}Highlights</button><button data-s="col">${IC.cols}Add to collection</button>
-    ${view === 'collection' && !isSmart(curCol) ? `<button data-s="uncol">${IC.minus}Remove from collection</button>` : ''}
-    ${view === 'vault' ? `<button data-s="unvault">${IC.vault}Back to Library</button>` : `<button data-s="vault">${IC.vault}Move to Vault</button>`}
-    <button data-s="del" class="danger">${IC.trash}Delete</button><button data-s="x">${IC.close}</button>`;
+  const T = (k, ic, label, cls = '', short = label) => `<button data-s="${k}" class="${cls}" aria-label="${label}" title="${label}" ${n ? '' : 'data-off'}>${IC[ic]}<span>${short}</span></button>`;
+  b.innerHTML = `<div class="sel-top"><button class="txtbtn" data-s="all">Select all</button><span class="count" aria-live="polite">${n ? `${n} selected` : 'Select items'}</span><button class="txtbtn strong" data-s="x">Done</button></div>
+    <div class="sel-tools">${T('fav', 'heart', 'Favorite')}${T('reel', 'reel', 'Highlights')}${T('col', 'cols', 'Add to collection', '', 'Add to')}
+    ${view === 'collection' && !isSmart(curCol) ? T('uncol', 'minus', 'Remove from collection', '', 'Remove') : ''}
+    ${view === 'vault' ? T('unvault', 'vault', 'Back to Library', '', 'Unhide') : T('vault', 'vault', 'Move to Vault', '', 'Vault')}
+    ${T('del', 'trash', 'Delete', 'danger')}</div>`;
   b.classList.add('show');
   b.onclick = async e => {
     const a = e.target.closest('[data-s]'); if (!a) return; const s = a.dataset.s;
     if (s === 'x') return endSelect();
-    if (s === 'all') { const g = view === 'library' ? '#libGrid' : view === 'collection' ? '#colItems' : view === 'search' ? '#results' : '#vaultGrid'; $$(g + ' .tile').forEach(t => { sel.add(t.dataset.id); t.classList.add('picked'); }); return drawSelbar(); }
+    if (s === 'all') { const g = view === 'library' ? '#libGrid' : view === 'collection' ? '#colItems' : view === 'search' ? '#results' : view === 'person' ? '#personGrid' : '#vaultGrid'; $$(g + ' .tile').forEach(t => { sel.add(t.dataset.id); t.classList.add('picked'); }); return drawSelbar(); }
     if (!n) return toast('Tap items to select them first');
     if (s === 'fav') { const on = !ids.every(id => itemById(id).fav); ids.forEach(id => itemById(id).fav = on); await save(); endSelect(); render(); toast(on ? 'Added to Favorites' : 'Removed from Favorites'); }
     else if (s === 'col') { if (await addToCollections(ids)) endSelect(); }
     else if (s === 'reel') { const its = ids.map(itemById).filter(Boolean); endSelect(); openReel(its, its.length === 1 ? its[0].title : `${its.length} picks`); }
-    else if (s === 'uncol') { ids.forEach(id => { const it = itemById(id); it.cols = it.cols.filter(c => c !== curCol); }); await save(); endSelect(); render(); toast('Removed from collection'); }
+    else if (s === 'uncol') { const cid = curCol, was = ids.filter(id => (itemById(id) || {}).cols && itemById(id).cols.includes(cid)); ids.forEach(id => { const it = itemById(id); it.cols = it.cols.filter(c => c !== cid); }); await save(); endSelect(); render();
+      toast('Removed from collection', 0, { undo: async () => { if (!idx) return; was.forEach(id => { const it = itemById(id); if (it && !it.cols.includes(cid)) it.cols.push(cid); }); await save(); render(); } }); }
     else if (s === 'vault' || s === 'unvault') { endSelect(); setVault(ids, s === 'vault'); }
     else if (s === 'del') { if (await deleteItems(ids)) endSelect(); }
   };
+}
+function startSelectWith(id) { if (!selecting) { selecting = true; document.body.classList.add('selecting'); } sel.add(id); $$(`.tile[data-id="${id}"]`).forEach(t => t.classList.add('picked')); drawSelbar(); }
+
+/* ---------- context menu (press and hold / right-click): a preview plus the common actions ---------- */
+let cxItem = null;
+function closeCx() { const m = $('#cxm'); if (!m || !m.classList.contains('open')) return; m.classList.remove('open'); cxItem = null; setTimeout(() => { if (!m.classList.contains('open')) m.innerHTML = ''; }, 250); }
+function openCx(it, tile, ev) {
+  if (!it || !idx) return; UI.haptic('heavy'); cxItem = it;
+  const m = $('#cxm'), u = thumbs.get(it.id), ar = Math.max(.6, Math.min(1.8, it.ar || 1));
+  const inV = !!it.vault, cols = idx.collections.length;
+  const I = (k, ic, label, cls = '') => `<button data-cx="${k}" class="${cls}"><span>${label}</span>${IC[ic]}</button>`;
+  m.innerHTML = `<div class="cx-dim" data-cx="x"></div><div class="cx-box" role="menu" aria-label="${esc(it.title)}">
+    <div class="cx-prev" style="--ar:${ar};--fb:${fbFor(it.id)}">${u ? `<img alt="" src="${u}">` : ''}${it.type === 'video' ? `<span class="dur">${fmt(it.dur)}</span>` : ''}</div>
+    <div class="cx-menu">${I('open', it.type === 'video' ? 'play' : 'open', it.type === 'video' ? 'Play' : 'Open')}${I('fav', 'heart', it.fav ? 'Unfavorite' : 'Favorite')}
+      ${I('col', 'cols', cols ? 'Add to collection' : 'New collection with this')}${I('vault', 'vault', inV ? 'Back to Library' : 'Move to Vault')}
+      <i class="sep"></i>${I('details', 'info', 'Details & tags')}${I('export', 'download', 'Save a copy')}${I('select', 'check', 'Select')}<i class="sep"></i>${I('delete', 'trash', 'Delete', 'danger')}</div></div>`;
+  m.classList.add('open');
+  // position: next to the tile on wide screens; centred sheet on phones
+  const box = m.querySelector('.cx-box');
+  if (matchMedia('(min-width: 900px)').matches) {
+    const x = ev && ev.clientX != null ? ev.clientX : tile.getBoundingClientRect().right, y = ev && ev.clientY != null ? ev.clientY : tile.getBoundingClientRect().top;
+    requestAnimationFrame(() => { const r = box.getBoundingClientRect(); box.style.left = Math.max(12, Math.min(innerWidth - r.width - 12, x)) + 'px'; box.style.top = Math.max(12, Math.min(innerHeight - r.height - 12, y - 40)) + 'px'; });
+  } else { box.style.left = ''; box.style.top = ''; }
+  m.onclick = async e => {
+    const b = e.target.closest('[data-cx]'); if (!b) return; const k = b.dataset.cx, cur = cxItem; closeCx(); if (k === 'x' || !cur) return;
+    const list = ctx.get(tile.closest('.grid')) || visible();
+    if (k === 'open') { if (cur.type === 'video') openPlayer(cur, list); else openLightbox(cur, list.filter(x => x.type === 'photo')); }
+    else if (k === 'fav') toggleFav(cur);
+    else if (k === 'col') addToCollections([cur.id]);
+    else if (k === 'vault') setVault([cur.id], !cur.vault);
+    else if (k === 'details') itemSheet(cur);
+    else if (k === 'export') exportItem(cur);
+    else if (k === 'select') startSelectWith(cur.id);
+    else if (k === 'delete') deleteItems([cur.id]);
+  };
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('#cxm').classList.contains('open')) { e.stopPropagation(); closeCx(); } }, true);
+addEventListener('scroll', () => { if (cxItem && matchMedia('(min-width: 900px)').matches) closeCx(); }, { passive: true });
+
+/* ---------- view options (Library ⋯): grid size, square vs whole photos, select, import a folder ---------- */
+async function viewOptions() {
+  const g = gridPref(), phone = !matchMedia('(min-width: 900px)').matches;
+  const k = await actionSheet('View', [
+    { r: 'in', label: 'Bigger tiles', ic: 'zoomin' }, { r: 'out', label: 'Smaller tiles', ic: 'zoomout' },
+    { r: 'shape', label: g.fit ? 'Square tiles' : 'Show whole photos', ic: g.fit ? 'grid' : 'shape' },
+    { r: 'select', label: 'Select', ic: 'check' }, { r: 'folder', label: 'Import a folder', ic: 'folder' }],
+    phone ? 'Tip: pinch the grid to zoom' : '');
+  if (k === 'in') setZoom(-1); else if (k === 'out') setZoom(1);
+  else if (k === 'shape') { const s = idx.settings.grid = idx.settings.grid || {}; s.fit = !g.fit; s.zoom = 0; await save(); render(); }
+  else if (k === 'select') toggleSelect(); else if (k === 'folder') $('#folder').click();
+}
+/* auto album ⋯ menu */
+async function smartMenu() {
+  const a = smartById(curCol); if (!a) return; const hidden = !!smartHidden()[a.id];
+  const k = await actionSheet(a.name, [{ r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'save', label: 'Save as collection', ic: 'plus' }, { r: 'select', label: 'Select', ic: 'check' }, hidden ? { r: 'show', label: 'Show in Collections', ic: 'eye' } : { r: 'hide', label: 'Hide this album', ic: 'eye' }], 'Auto albums update themselves as your library changes.');
+  if (k === 'reel') $('#smReel').click(); else if (k === 'save') $('#smSave').click(); else if (k === 'select') toggleSelect();
+  else if (k === 'show') { delete smartHidden()[a.id]; await save(); toast('Shown in Collections again'); renderSmartCollection(); }
+  else if (k === 'hide') { await hideSmart(a); nav('collections'); toast(`“${a.name}” hidden`, 0, { undo: async () => { delete smartHidden()[a.id]; await save(); if (view === 'collections') renderSmartAlbums(); } }); }
 }
 
 /* ---------- lightbox ---------- */
@@ -1132,11 +1336,11 @@ async function showLb() {
   } catch (e) { if (tok === lbTok && Store.isUnlocked()) st.innerHTML = `<div class="empty"><b>Can’t show this file</b>${esc(e.message)}</div>`; }
 }
 function lbStep(d) { if (lbList.length < 2) return; lbIdx = (lbIdx + d + lbList.length) % lbList.length; showLb(); }
-function closeLightbox() { lb.classList.remove('open'); lbTok++; }
+function closeLightbox() { lb.classList.remove('open', 'bare'); lbTok++; }
 $('#lbClose').onclick = closeLightbox; $('#lbPrev').onclick = () => lbStep(-1); $('#lbNext').onclick = () => lbStep(1);
 $('#lbFav').onclick = () => { const it = lbList[lbIdx]; if (it) toggleFav(it); };
 $('#lbMore').onclick = () => itemSheet(lbList[lbIdx]);
-lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
+lb.addEventListener('click', e => { if (e.target === lb) { closeLightbox(); return; } if (e.target.closest('#lbStage') && !e.target.closest('button')) lb.classList.toggle('bare'); });
 let sx = null, sy = 0; lb.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; sx = e.clientX; sy = e.clientY; });
 lb.addEventListener('pointerup', e => { if (sx === null) return; const dx = e.clientX - sx, dy = e.clientY - sy; sx = null; if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) lbStep(dx < 0 ? 1 : -1); else if (dy > 90) closeLightbox(); });
 
@@ -1172,7 +1376,9 @@ $('#cSpeed').onclick = () => { speedI = (speedI + 1) % SPEEDS.length; vid.playba
 $('#cMute').onclick = () => { vid.muted = !vid.muted; setIcon($('#cMute'), vid.muted ? 'mute' : 'vol'); flash(vid.muted ? 'Muted' : 'Sound on'); };
 $('#cFav').onclick = () => { if (curVid) toggleFav(curVid); };
 $('#plThumb').onclick = () => setPreviewFromPlayer();
-$('#plMore').onclick = () => { if (curVid) { vid.pause(); itemSheet(curVid); } };
+$('#plMore').onclick = async () => { if (!curVid) return; const it = curVid;
+  const k = await actionSheet(it.title, [{ r: 'details', label: 'Details & tags', ic: 'info' }, { r: 'speed', label: `Speed: ${SPEEDS[speedI]}x`, ic: 'fwd' }, { r: 'mute', label: vid.muted ? 'Turn sound on' : 'Mute', ic: vid.muted ? 'vol' : 'mute' }, { r: 'cover', label: 'Use this frame as cover', ic: 'image' }, { r: 'full', label: 'Full screen', ic: 'full' }]);
+  if (k === 'details') { vid.pause(); itemSheet(it); } else if (k === 'speed') $('#cSpeed').click(); else if (k === 'mute') $('#cMute').click(); else if (k === 'cover') setPreviewFromPlayer(); else if (k === 'full') $('#cFull').click(); };
 $('#cFull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
   else if (pl.requestFullscreen) pl.requestFullscreen().catch(() => { if (vid.webkitEnterFullscreen) vid.webkitEnterFullscreen(); });
@@ -1187,12 +1393,17 @@ vid.addEventListener('loadedmetadata', () => { vid.playbackRate = SPEEDS[speedI]
 vid.addEventListener('timeupdate', updProg); vid.addEventListener('progress', updProg);
 vid.addEventListener('ended', () => { pl.classList.remove('idle'); const i = plList.indexOf(curVid); const n = plList[(i + 1) % plList.length]; if (n && n !== curVid) { flash('Up next: ' + n.title); const c = curVid; setTimeout(() => { if (curVid === c && vid.ended) openPlayer(n, plList); }, 1600); } });
 vid.addEventListener('error', () => { if (curVid && vid.getAttribute('src')) { pl.classList.remove('loading'); flash(Thumbs.isHevc(curVid.codec) ? 'This is an HEVC (iPhone) video, which this device can’t decode. It plays on iPhone; on Windows install “HEVC Video Extensions”, or record in “Most Compatible”.' : 'This video format can’t play here (try H.264 MP4)'); } });
-vid.addEventListener('click', togglePlay);
+const touchUI = () => matchMedia('(hover: none)').matches;
+vid.addEventListener('click', () => { if (touchUI()) { if (pl.classList.contains('idle') || vid.paused) { if (pl.classList.contains('idle')) { pl.classList.remove('idle'); wake(); } else togglePlay(); } else { clearTimeout(hideT); pl.classList.add('idle'); } } else togglePlay(); });
+UI.swipeDown(pl, { onClose: closePlayer, ignore: e => !!e.target.closest('#prog,.chrow,.rel,#rel,.ctrls,.pl-side,#chStrip,button') || pl.classList.contains('chap-open') && !!e.target.closest('.chstrip') });
+UI.swipeDown(lb, { onClose: closeLightbox, ignore: e => !!e.target.closest('button') });
 function updProg() {
   const d = vid.duration || (curVid && curVid.dur) || 0, t = vid.currentTime || 0, p = d ? Math.min(100, t / d * 100) : 0;
   if (!dragging) { $('#fill').style.width = p + '%'; $('#knob').style.left = p + '%'; }
   try { if (vid.buffered.length && isFinite(vid.duration)) $('#buf').style.width = (vid.buffered.end(vid.buffered.length - 1) / vid.duration * 100) + '%'; } catch (e) { }
   $('#time').textContent = fmt(t) + ' / ' + fmt(d);
+  const tc = $('#tCur'), tl = $('#tLeft'); if (tc) tc.textContent = fmt(t); if (tl) tl.textContent = '−' + fmt(Math.max(0, d - t));
+  const cn = $('#chNow'); if (cn) { const k = chapAt(t); cn.textContent = chap.list && chap.list.length > 1 && k >= 0 ? chap.list[k].label : ''; }
 }
 const prog = $('#prog');
 const posAt = x => { const r = prog.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
@@ -1203,7 +1414,7 @@ prog.addEventListener('pointerdown', e => { dragging = true; prog.classList.add(
 const endDrag = () => { if (!dragging) return; dragging = false; prog.classList.remove('drag'); updProg(); wake(); };
 prog.addEventListener('pointerup', endDrag); prog.addEventListener('pointercancel', endDrag);
 function wake() { pl.classList.remove('idle'); clearTimeout(hideT); hideT = setTimeout(() => { if (!vid.paused && !dragging && pl.classList.contains('open')) pl.classList.add('idle'); }, 2500); }
-['pointermove', 'pointerdown', 'touchstart'].forEach(ev => pl.addEventListener(ev, wake, { passive: true }));
+['pointermove', 'pointerdown', 'touchstart'].forEach(ev => pl.addEventListener(ev, e => { if (e.target === vid && matchMedia('(hover: none)').matches) return; wake(); }, { passive: true }));  // on touch, a tap on the video toggles the controls instead
 
 /* ---------- video chapters (v1.3): on-device scene detection, encrypted per-video sidecar ---------- */
 const b64of = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(blob); });
@@ -1456,7 +1667,7 @@ async function renderSmartAlbums() {
   const el = $('#smartAlbums'); if (!el) return;
   if (!aiOn()) { el.innerHTML = ''; return; }
   const H = smartHidden(), al = (await getSmart()).filter(a => !H[a.id]); if (view !== 'collections') return;
-  if (!al.length) { el.innerHTML = `<div class="smart-empty">${IC.spark}<span>Smart albums appear here once on-device AI has indexed a few photos.</span></div>`; return; }
+  if (!al.length) { el.innerHTML = `<div class="smart-empty">${IC.spark}<span>Auto albums show up here once on-device AI has looked at a few photos.</span></div>`; return; }
   el.innerHTML = Object.entries(KINDL).map(([k, l]) => { const xs = al.filter(a => a.kind === k); if (!xs.length) return '';
     return `<div class="sub-h smart-h">${IC.spark}${l}</div><div class="smart-row">${xs.map((a, i) => { const cv = smartCover(a);
       return `<div class="col-card smart" data-smart="${esc(a.id)}" style="--fb:${fbFor(a.id)};--i:${i}" role="button" tabindex="0">${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="gloss"></div>
@@ -1465,31 +1676,31 @@ async function renderSmartAlbums() {
   hydrateCovers(el);
   el.querySelectorAll('[data-smart]').forEach(c => c.onclick = () => openCollection(c.dataset.smart));
   el.querySelectorAll('[data-hide]').forEach(b => b.onclick = async e => { e.stopPropagation(); const a = smartById(b.dataset.hide); if (!a) return;
-    const r = await modal(`<h3>${esc(a.name)}</h3><div class="menu"><button data-r="hide">${IC.minus}Hide this album</button></div><p class="sub-note">Bring it back any time in Profile → On-device AI → Hidden auto albums.</p><div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button></div>`);
-    if (r === 'hide') { await hideSmart(a); renderSmartAlbums(); toast(`“${a.name}” hidden`); } });
+    const r = await actionSheet(a.name, [{ r: 'hide', label: 'Hide this album', ic: 'eye' }], 'You can bring it back any time in Profile → Hidden auto albums.');
+    if (r === 'hide') { await hideSmart(a); renderSmartAlbums(); toast(`“${a.name}” hidden`, 0, { undo: async () => { delete smartHidden()[a.id]; await save(); if (view === 'collections') renderSmartAlbums(); } }); } });
 }
 async function renderSmartCollection() {
   await getSmart(); const a = smartById(curCol); if (!a) { nav('collections'); return; }
   const items = a.ids.map(itemById).filter(i => i && !i.vault && !i.archived), cv = smartCover(a);
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
-  h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
+  h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="hero-fade"></div>
     <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
-    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button><button class="btn btn-ghost btn-sm" id="smHide">${smartHidden()[a.id] ? 'Show in Collections' : 'Hide'}</button></div>`;
-  hydrateCovers(h);
+    <div class="hero-actions"><button class="btn btn-primary btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
+  hydrateCovers(h); h.classList.toggle('nocover', !cv);
   $('#smReel').onclick = () => openReel(items, a.name);
   $('#smSave').onclick = async () => {
     const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
     const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
     items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await hideSmart(a, 'saved', { col: c.id }); toast(`Saved “${c.name}”. The auto album is now hidden`); openCollection(c.id);
   };
-  $('#smHide').onclick = async () => { if (smartHidden()[a.id]) { delete smartHidden()[a.id]; await save(); toast('Shown in Collections again'); renderSmartCollection(); } else { await hideSmart(a); toast(`“${a.name}” hidden`); nav('collections'); } };
+  updNav();
   const list = a.kind === 'moment' ? items.slice().sort((x, y) => Smart.timeOf(x) - Smart.timeOf(y)) : sortNew(items);
-  renderGrid($('#colItems'), list, `<div class="empty"><b>Nothing here right now</b>Smart albums update as your library changes.</div>`);
+  renderGrid($('#colItems'), list, emptyHTML('spark', 'Nothing here right now', 'Auto albums update themselves as your library changes.'));
 }
 
 function archiveItems(ids, on = true) {
   ids.forEach(id => { const it = itemById(id); if (!it) return; if (on) it.archived = Date.now(); else delete it.archived; });
-  return save().then(() => toast(on ? `Archived ${ids.length} item${ids.length === 1 ? '' : 's'}. Find them in Profile → Archive.` : `Restored ${ids.length} item${ids.length === 1 ? '' : 's'}`));
+  return save().then(() => toast(on ? `Archived ${plural(ids.length, 'item')}. They’re in Profile → Archive` : `Restored ${plural(ids.length, 'item')}`, 0, on ? { undo: async () => { if (!idx) return; ids.forEach(id => { const it = itemById(id); if (it) delete it.archived; }); await save(); render(); toast('Back in your library'); } } : {}));
 }
 const qLabel = (r, top) => r.q >= top - .8 ? 'Sharp' : r.q >= top - 2 ? 'Softer' : 'Blurry or dark';
 async function renderBest() {
@@ -1506,7 +1717,7 @@ async function renderBest() {
       <div class="drow">${g.rows.map(r => { const it = itemById(r.id), b = r.id === g.best;
         return `<label class="dtile ${b ? 'keep best' : ''}" data-id="${r.id}"><input type="checkbox" ${b ? '' : 'checked'} data-arch="${r.id}"><div class="dimg" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))}"><img data-tid="${r.id}" alt=""></div><small>${esc(it.title)}<br>${qLabel(r, Math.max(...g.rows.map(x => x.q)))} · ${it.w ? it.w + '×' + it.h : ''}</small><span class="kb">${b ? '★ Best' : 'Archive'}</span></label>`; }).join('')}</div>
       <div class="dact"><button class="btn btn-primary btn-sm" data-keepbest="${gi}">${IC.check}Keep best, archive rest</button></div></div>`).join('')}
-    ${!groups.length ? `<div class="empty"><b>No bursts or look-alikes</b>When you have several similar shots, they’ll show up here.</div>` : ''}`;
+    ${!groups.length ? emptyHTML('star', 'No bursts or look-alikes', 'When you have several similar shots, they’ll show up here so you can keep the best one.') : ''}`;
   hydrateCovers(body); hydrateIcons(body);
   body.querySelectorAll('input[data-arch]').forEach(cb => cb.onchange = () => { const t = cb.closest('.dtile'); t.classList.toggle('keep', !cb.checked); t.querySelector('.kb').textContent = cb.checked ? 'Archive' : (t.classList.contains('best') ? '★ Best' : 'Keep'); });
   const run = async grps => { const ids = grps.flatMap(g => [...g.querySelectorAll('input[data-arch]:checked')].map(x => x.dataset.arch)); if (!ids.length) { toast('Nothing selected to archive'); return; } await archiveItems(ids); nav('best', { keepScroll: true }); };
@@ -1520,7 +1731,7 @@ function renderArchive() {
     <p class="sub-note">Archived items are hidden from Library, Collections, Search and smart albums. They stay encrypted on this device until you delete them.</p>
     ${items.length ? `<div class="dact top"><button class="btn btn-ghost btn-sm" id="archSelAll">${IC.check}Select all</button><button class="btn btn-primary btn-sm" id="archRestore">Restore selected</button><button class="btn btn-danger btn-sm" id="archDel">${IC.trash}Delete selected</button></div>
       <div class="drow arch">${items.map(it => `<label class="dtile" data-id="${it.id}"><input type="checkbox" data-a="${it.id}"><div class="dimg" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))}"><img data-tid="${it.id}" alt=""></div><small>${esc(it.title)}<br>archived ${new Date(it.archived).toLocaleDateString()}</small></label>`).join('')}</div>`
-      : `<div class="empty"><b>Archive is empty</b>Use Best shots to tidy up bursts and look-alikes.</div>`}`;
+      : emptyHTML('folder', 'The Archive is empty', 'Best shots puts the extras from bursts and look-alikes here, so you can bring them back any time.')}`;
   hydrateCovers(body); hydrateIcons(body);
   const picked = () => [...body.querySelectorAll('input[data-a]:checked')].map(x => x.dataset.a);
   const sa = $('#archSelAll'); if (sa) sa.onclick = () => { const cbs = [...body.querySelectorAll('input[data-a]')], on = cbs.some(c => !c.checked); cbs.forEach(c => c.checked = on); };
@@ -1555,11 +1766,12 @@ function renderRules() {
     <p class="sub-note">Rules run on this device whenever new items are indexed or you edit tags. Each rule moves an item once, so if you take something back out of the Vault it stays out.</p>
     <div class="card rows rules">${rules.map(r => `<div class="row rule" data-rid="${r.id}"><div class="meta">${esc(r.name || Smart.describe(r, (colById(r.col) || {}).name))}<small>${Smart.describe(r, (colById(r.col) || {}).name)}${r.count ? ` · applied to ${r.count}` : ''}${r.action === 'col' && !colById(r.col) ? ' · collection was deleted' : ''}</small></div>
       <button class="switch" role="switch" aria-checked="${!!r.on}" data-ron="${r.id}" aria-label="Rule on"></button><button class="iconbtn sm" data-rdel="${r.id}" aria-label="Delete rule">${IC.trash}</button></div>`).join('') ||
-      `<div class="row"><div class="meta">No rules yet<small>Example: items tagged “beach” → collection “Summer”, or items looking like “documents” → Vault.</small></div></div>`}</div>
+      `<div class="row"><span class="meta"><span class="mt">No rules yet</span><small>For example: things tagged “beach” go to a “Summer” collection, or anything that looks like “documents” goes to the Vault.</small></span></div>`}</div>
     <div class="dact top"><button class="btn btn-primary btn-sm" id="ruleAdd">${IC.plus}Add rule</button>${rules.length ? `<button class="btn btn-ghost btn-sm" id="ruleRun">Run rules now</button>` : ''}</div>`;
   hydrateIcons(body);
   body.querySelectorAll('[data-ron]').forEach(b => b.onclick = async () => { const r = rules.find(x => x.id === b.dataset.ron); r.on = !r.on; await save(); renderRules(); if (r.on) applyRules({ only: [r.id] }); });
-  body.querySelectorAll('[data-rdel]').forEach(b => b.onclick = async () => { const r = rules.find(x => x.id === b.dataset.rdel); if (!(await confirmBox('Delete rule?', 'Items it already moved stay where they are.', 'Delete', true))) return; idx.settings.rules = rules.filter(x => x !== r); await save(); renderRules(); });
+  body.querySelectorAll('[data-rdel]').forEach(b => b.onclick = async () => { const r = rules.find(x => x.id === b.dataset.rdel); if (!(await confirmBox('Delete rule?', 'Items it already moved stay where they are.', 'Delete', true))) return; const pos = rules.indexOf(r); idx.settings.rules = rules.filter(x => x !== r); await save(); renderRules();
+    toast('Rule deleted', 0, { undo: async () => { if (!idx) return; rulesOf().splice(pos, 0, r); await save(); if (view === 'rules') renderRules(); } }); });
   $('#ruleAdd').onclick = addRuleDialog;
   const rr = $('#ruleRun'); if (rr) rr.onclick = async () => { const n = await applyRules(); if (!n) toast('Rules ran: nothing new to move'); renderRules(); };
 }
@@ -1648,7 +1860,13 @@ document.addEventListener('keydown', e => {
 });
 
 /* ---------- boot ---------- */
-hydrateIcons();
+hydrateIcons(); applyTextSize();
+let titleWatch = null;
+titleWatch = UI.largeTitles($('#navbar'), () => { const v = $('.view.active'); return v && v.querySelector('header.lt h1, .section-title h2, .phero h2, .col-hero h2'); });
+const pageOf = () => $('.view.active');
+UI.swipeBack({ canBack: () => !!idx && navStack.length > 1 && !document.querySelector('.modal') && !pl.classList.contains('open') && !lb.classList.contains('open') && !$('#cxm').classList.contains('open') && !selecting, onBack: goBack, target: pageOf });
+UI.pullToRefresh({ indicator: $('#ptr'), enabled: () => !!idx && !selecting && ['library', 'collections', 'people', 'collection'].includes(view) && !document.querySelector('.modal'),
+  onRefresh: async () => { if (aiOn() && !AI.isRunning()) setTimeout(() => startAI(), 50); render(); } });
 if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   const hadCtl = !!navigator.serviceWorker.controller; let reloading = false;
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => { swReg = reg; reg.update().catch(() => { }); document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); }); }).catch(e => console.warn('SW', e));
@@ -1663,4 +1881,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
