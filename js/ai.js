@@ -30,7 +30,47 @@ let vocab = null;
 export const BLOCKED_TAGS = new Set(['child', 'children', 'kid', 'kids', 'baby', 'babies', 'toddler', 'toddlers', 'infant', 'infants', 'teen', 'teens', 'teenager', 'teenagers',
   'minor', 'minors', 'boy', 'boys', 'girl', 'girls', 'youth', 'elderly', 'senior', 'seniors', 'adult', 'adults']);
 export const isBlockedTag = t => BLOCKED_TAGS.has(String(t || '').trim().toLowerCase());
-export const hasBlockedWord = s => String(s || '').toLowerCase().split(/[^a-z]+/).some(w => BLOCKED_TAGS.has(w));
+/* v1.6: names, phrases and renames the user types are checked more strictly: variants, compounds, common
+   misspellings and look-alike spellings ("k1ds", "chlid", "teeen", "schoolgirl") of age-related words are refused. */
+const AGE_WORDS = ['child', 'children', 'kid', 'kids', 'kiddo', 'kiddos', 'kiddie', 'kiddies', 'baby', 'babies', 'toddler', 'toddlers', 'infant', 'infants', 'newborn', 'newborns',
+  'teen', 'teens', 'teenage', 'teenager', 'teenagers', 'preteen', 'preteens', 'tween', 'tweens', 'minor', 'minors', 'underage', 'juvenile', 'juveniles', 'adolescent', 'adolescents',
+  'young', 'younger', 'youngster', 'youngsters', 'youth', 'youths', 'boy', 'boys', 'girl', 'girls', 'gurl', 'gurls', 'lil', 'school', 'schools', 'schoolgirl', 'schoolboy', 'preschool', 'kindergarten',
+  'pubescent', 'prepubescent', 'loli', 'lolita', 'shota', 'elderly', 'senior', 'seniors', 'adult', 'adults'];
+const AGE_SET = new Set([...AGE_WORDS, ...BLOCKED_TAGS]);
+const AGE_STEMS = ['child', 'toddler', 'newborn', 'teenage', 'preteen', 'underage', 'juvenile', 'adolescen', 'school', 'kindergarten', 'pubescen', 'lolita', 'youngster', 'kiddie', 'babies'];
+const LEET = { '0': 'o', '1': 'i', '!': 'i', '|': 'i', '3': 'e', '4': 'a', '@': 'a', '5': 's', '$': 's', '7': 't', '+': 't', '8': 'b', '9': 'g' };
+const near = (a, b) => {                 // one insertion, deletion or swap of neighbours (not substitutions: avoids "mouth"/"youth")
+  if (a === b) return true; const la = a.length, lb = b.length;
+  if (la === lb) { for (let i = 0; i < la - 1; i++) if (a[i] !== b[i]) return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2); return false; }
+  if (Math.abs(la - lb) !== 1) return false; const [s, l] = la < lb ? [a, b] : [b, a];
+  for (let i = 0; i < l.length; i++) if (l.slice(0, i) + l.slice(i + 1) === s) return true; return false;
+};
+const FUZZY = AGE_WORDS.filter(w => w.length >= 5);
+const squash = w => w.replace(/(.)\1+/g, '$1');
+const SQUASHED = new Map(AGE_WORDS.filter(w => w.length >= 4 && squash(w) !== 'ten' && squash(w) !== 'tens').map(w => [squash(w), w]));
+// returns the age-related word found in a user-typed name/phrase (or null)
+export function blockedTerm(text) {
+  const raw = String(text || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  const t = raw.replace(/[0-9!|@$+]/g, c => LEET[c] || c);
+  const words = t.split(/[^a-z]+/).filter(Boolean), joined = words.join('');
+  for (const w of words) {
+    if (AGE_SET.has(w)) return w;
+    const w2 = w.replace(/(.)\1{2,}/g, '$1$1'); if (AGE_SET.has(w2)) return w2;               // "teeeen" -> "teen"
+    if (SQUASHED.has(squash(w))) return SQUASHED.get(squash(w));                             // "chilld", "babby", "kiddds"
+    if (w.length >= 4) { const f = FUZZY.find(b => near(w, b)); if (f) return f; }             // "chlid", "yuong", "toddlr"
+    if (/s$/.test(w) && AGE_SET.has(w.slice(0, -1))) return w.slice(0, -1);
+  }
+  for (const st of AGE_STEMS) if (joined.includes(st)) return st;                            // compounds and split spellings: "schoolgirl", "pre teen", "s c h o o l"
+  const SHORT = ['kids', 'kid', 'girls', 'girl', 'boys', 'boy', 'teens', 'teen', 'baby'], OK = new Set(['kidney', 'kidneys', 'kidnap', 'kidnapped', 'boycott', 'boyfriend', 'boyfriends', 'girlfriend', 'girlfriends', 'teenth']);
+  const PRE = ['little', 'small', 'tiny', 'young', 'baby', 'smol', 'lil', 'cute', 'my'];
+  for (const w of words) for (const b of SHORT) {
+    if (w.length > b.length && w.startsWith(b) && !OK.has(w)) return b;                       // "kidsroom", "girlsnight", "babyshower"
+    if (w.length > b.length && w.endsWith(b) && PRE.some(p => w === p + b)) return b;           // "littlegirl", "babyboy"
+  }
+  return null;
+}
+export const hasBlockedWord = s => !!blockedTerm(s);
+export const BLOCKED_MSG = 'Velvet doesn’t allow tags about children or age. Please choose a different name.';
 async function loadVocab() {
   if (vocab) return vocab;
   const j = await (await fetch(new URL('../models/velvet-vocab-v2.json', import.meta.url))).json();
@@ -167,6 +207,7 @@ export async function labelFrames(blobs) {
 }
 
 /* ---------- helpers for smart albums / best shots / rules (batch 2) ---------- */
+export const indexedIds = () => [...vecs.keys()].filter(id => vecs.get(id).length);
 export const entryOf = id => (data && data.items[id]) || null;
 export function itemVec(id) { const l = vecs.get(id); return l && l.length ? meanVec(l) : null; }
 export const dot = (a, b) => { let s = 0; for (let i = 0; i < 512; i++) s += a[i] * b[i]; return s; };

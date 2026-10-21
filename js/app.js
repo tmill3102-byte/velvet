@@ -6,6 +6,8 @@ import * as Smart from './smart.js';
 import * as Scenes from './scenes.js';
 import * as People from './people.js';
 import * as UI from './ios.js';
+import * as CT from './ctags.js';
+import * as Dedupe from './dedupe.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -161,7 +163,7 @@ function goBack() {
   if (e.col !== undefined) curCol = e.col; if (e.person !== undefined) curPerson = e.person;
   nav(e.v, { back: true }); return true;
 }
-const TITLES = { library: 'Library', collections: 'Collections', search: 'Search', vault: 'Vault', profile: 'Profile', people: 'People', dupes: 'Duplicates', best: 'Best Shots', archive: 'Archive', rules: 'Smart Rules' };
+const TITLES = { library: 'Library', collections: 'Collections', search: 'Search', vault: 'Vault', profile: 'Profile', people: 'People', dupes: 'Duplicates', best: 'Best Shots', archive: 'Archive', rules: 'Smart Rules', tags: 'Custom Tags' };
 function titleOf(e) {
   if (!e) return '';
   if (e.v === 'collection') { const id = e.col !== undefined ? e.col : curCol; const c = isSmart(id) ? smartById(id) : colById(id); return c ? c.name : 'Collection'; }
@@ -200,6 +202,7 @@ function render() {
   else if (view === 'best') renderBest();
   else if (view === 'archive') renderArchive();
   else if (view === 'rules') renderRules();
+  else if (view === 'tags') renderTags();
   else if (view === 'people') renderPeople();
   else if (view === 'person') renderPerson();
 }
@@ -212,7 +215,7 @@ document.addEventListener('click', e => {
   const a = e.target.closest('[data-act]');
   if (a) {
     const act = a.dataset.act;
-    if (act === 'lock') lockNow(); else if (act === 'import') pickFiles(); else if (act === 'folder') $('#folder').click(); else if (act === 'select') toggleSelect();
+    if (act === 'lock') lockNow(); else if (act === 'import') pickFiles(); else if (act === 'folder') pickFolder(); else if (act === 'select') toggleSelect();
     return;
   }
   const c = e.target.closest('[data-col]'); if (c && !e.target.closest('.cmenu')) { openCollection(c.dataset.col); }
@@ -274,14 +277,14 @@ function afterUnlock(first) {
   idx.settings = Object.assign(Store.emptyIndex().settings, idx.settings || {});
   lockEl.classList.remove('open'); app.classList.remove('locked'); app.removeAttribute('aria-hidden');
   gate.innerHTML = '';
-  applyTextSize(); nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
+  refreshTV(); applyTextSize(); backfillHashes(); if (host) autoCheckFolders(); nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
   if (first) setTimeout(() => toast('Your gallery is ready'), 600);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (aiOn() && People.on(idx)) People.open(idx).then(() => { if (view === 'collections') renderPeopleRow('#peopleRow'); }).catch(e => console.warn('People open', e));
   if (scrubBlockedTags()) save().catch(() => { });
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
-function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
+function lockNow() { hashTok++; try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear(); if (typeof ctLast !== 'undefined') ctLast.clear();
   flushDeletes(); closeCx(); $('#toast').classList.remove('show'); toastUndo = null;
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
@@ -289,7 +292,7 @@ function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 
   Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
-  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
+  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#tagsBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
   app.classList.add('locked'); app.setAttribute('aria-hidden', 'true'); lockEl.classList.add('open');
   gateUnlock();
 }
@@ -492,8 +495,12 @@ async function newCollection(addIds) {
   await save(); render(); toast(`Created “${c.name}”`); return c;
 }
 async function collectionMenu(c) {
-  const r = await actionSheet(c.name, [{ r: 'import', label: 'Add photos & videos', ic: 'plus' }, { r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'delete', label: 'Delete collection', ic: 'trash', danger: true }]);
+  const fs = host && host.listFolder && c.src ? [{ r: 'check', label: 'Check for new files', ic: 'folder' }, { r: 'auto', label: c.src.auto ? 'Stop checking when Velvet opens' : 'Check automatically when Velvet opens', ic: 'bolt' }, { r: 'unlink', label: 'Forget the folder', ic: 'close' }] : [];
+  const r = await actionSheet(c.name, [...fs, { r: 'import', label: 'Add photos & videos', ic: 'plus' }, { r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'delete', label: 'Delete collection', ic: 'trash', danger: true }]);
   if (r === 'reel') { openReel(colItems(c), c.name); return; }
+  if (r === 'check') { await checkFolder(c); return; }
+  if (r === 'auto') { c.src.auto = !c.src.auto; await save(); toast(c.src.auto ? `Velvet will check “${c.name}” for new files each time it opens` : 'Automatic checks turned off'); if (view === 'collection') renderCollection(); return; }
+  if (r === 'unlink') { const old = c.src; delete c.src; await save(); if (view === 'collection') renderCollection(); toast('Folder forgotten. Its files stay in Velvet', 0, { undo: async () => { if (!idx) return; c.src = old; await save(); if (view === 'collection') renderCollection(); } }); return; }
   if (r === 'rename') { const n = (await promptBox('Rename collection', '', c.name) || '').trim(); if (n) { c.name = n.slice(0, 60); await save(); render(); } }
   else if (r === 'import') { curCol = c.id; pickFiles(c.id); }
   else if (r === 'delete') {
@@ -512,10 +519,11 @@ function renderCollection() {
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(c.id));
   const n = colItems(c).length;
   h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div class="hero-fade"></div>
-    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private</p></div>
-    <div class="hero-actions">${n ? `<button class="btn btn-primary btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
+    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private${c.src && host ? ` · ${IC.folder}From a folder${c.src.auto ? ', checked when Velvet opens' : ''}${c.src.last ? ` · checked ${ago(c.src.last)}` : ''}` : ''}</p></div>
+    <div class="hero-actions">${c.src && host && host.listFolder ? `<button class="btn btn-primary btn-sm" id="colSync">${IC.folder}<span>Check for new files</span></button>` : ''}${n ? `<button class="btn ${c.src && host ? 'btn-ghost' : 'btn-primary'} btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
   hydrateCovers(h); h.classList.toggle('nocover', !coverOf(c));
   const cr = $('#colReel'); if (cr) cr.onclick = () => openReel(colItems(c), c.name);
+  const cs = $('#colSync'); if (cs) cs.onclick = async () => { cs.disabled = true; await checkFolder(c); cs.disabled = false; };
   renderGrid($('#colItems'), sortNew(colItems(c)), emptyHTML('cols', 'This collection is empty', 'Add photos and videos straight into it, or choose <b>Select</b> in your Library and tap <b>Add to</b>.', `<button class="btn btn-primary" data-act="import">${IC.plus}Add photos &amp; videos</button>`));
 }
 
@@ -523,8 +531,10 @@ function renderCollection() {
 const activeTags = new Set();
 function hl(s, q) { s = esc(s); if (!q) return s; const i = s.toLowerCase().indexOf(q); return i < 0 ? s : s.slice(0, i) + '<mark>' + s.slice(i, i + q.length) + '</mark>' + s.slice(i + q.length); }
 function tagCounts() { const m = new Map(); visible().forEach(i => (i.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1))); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
-function aiTagCounts() { const m = new Map(), mine = new Set(tagCounts()); visible().forEach(i => (i.aiTags || []).forEach(t => { if (!mine.has(t)) m.set(t, (m.get(t) || 0) + 1); })); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
-const hasTag = (i, t) => (i.tags || []).includes(t) || (i.aiTags || []).includes(t);
+function aiTagCounts() { const m = new Map(), mine = new Set(tagCounts()); visible().forEach(i => [...TV.custom(i), ...TV.ai(i)].forEach(t => { if (!mine.has(t)) m.set(t, (m.get(t) || 0) + 1); })); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
+let TV = CT.makeView(); Smart.setTagView(TV);
+function refreshTV() { TV = CT.makeView((idx && idx.settings.tagAlias) || {}, (idx && idx.settings.ctags) || []); Smart.setTagView(TV); smartCache = null; }
+const hasTag = (i, t) => (i.tags || []).includes(t) || TV.all(i).has(t);
 let smartTok = 0;
 function renderSearch() {
   const q = $('#q').value.trim().toLowerCase();
@@ -544,7 +554,7 @@ function renderSearch() {
   if (!pOn) $('#searchPeople').innerHTML = ''; else if (!q) renderPeopleRow('#searchPeople'); else $('#searchPeople').innerHTML = '';
   $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span class="hint-line">No suggestions yet</span>';
   const res = visible().filter(i => {
-    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + (i.aiTags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase();
+    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + [...TV.ai(i), ...TV.custom(i)].join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
     for (const t of activeTags) {
       if (t === '__fav') { if (!i.fav) return false; } else if (t === '__photo') { if (i.type !== 'photo') return false; } else if (t === '__video') { if (i.type !== 'video') return false; }
@@ -691,38 +701,42 @@ const extOf = n => (n.split('.').pop() || '').toLowerCase();
 function mimeOf(f) { const t = (f.type || '').toLowerCase(); if (/^(image|video)\//.test(t)) return t; return EXT[extOf(f.name)] || ''; }
 const LIMIT = isIOS ? 400 * 1024 ** 2 : 2 * 1024 ** 3;
 let pendingCol = null;
+function pickFolder() { if (host && host.pickFolder) importFolderDesktop(); else $('#folder').click(); }
 function pickFiles(colId) { pendingCol = colId || (view === 'collection' ? curCol : null); $('#file').click(); }
 $('#file').addEventListener('change', e => { const fs = Array.from(e.target.files || []).map(f => ({ file: f })); e.target.value = ''; importFiles(fs, pendingCol); pendingCol = null; });
 $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.files || []).map(f => ({ file: f, folder: (f.webkitRelativePath || '').split('/')[0] || null })); e.target.value = ''; importFiles(fs, null); });
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.5.0';
+const APP_VER = '1.6.0';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
   it.pv = th && th.blob ? { ok: true, via: th.via || (it.type === 'video' ? 'element' : 'image'), at: Date.now() }
     : { ok: false, at: Date.now(), cs: d.cs || '', why: String(err ? (err.message || err) : (th && th.err) || (it.type === 'photo' && Thumbs.isHeic(it.mime, it.name) ? 'HEIC could not be decoded here' : 'no frame could be decoded')).slice(0, 600) };
 }
-async function importFiles(entries, colId) {
-  if (!idx) return;
+async function importFiles(entries, colId, opt = {}) {
+  if (!idx) return { done: 0, dup: 0, failed: 0 };
   const ok = entries.filter(e => mimeOf(e.file)), skipped = entries.length - ok.length;
-  if (!ok.length) { toast(skipped ? 'Those files aren’t photos or videos Velvet can open.' : 'No files selected'); return; }
+  if (!ok.length) { if (!opt.quiet) toast(skipped ? 'Those files aren’t photos or videos Velvet can open.' : 'No files selected'); return { done: 0, dup: 0, failed: 0 }; }
   const big = ok.filter(e => e.file.size > LIMIT);
-  if (big.length && !(await confirmBox('Very large file' + (big.length > 1 ? 's' : ''), `${big.length} file(s) are over ${bytes(LIMIT)} (largest ${bytes(Math.max(...big.map(e => e.file.size)))}). Velvet decrypts a video into memory to play it, so ${isIOS ? 'an iPhone may not be able to play files this big' : 'playback needs that much free RAM'}. Import anyway?`, 'Import anyway'))) return;
+  if (big.length && !opt.quiet && !(await confirmBox('Very large file' + (big.length > 1 ? 's' : ''), `${big.length} file(s) are over ${bytes(LIMIT)} (largest ${bytes(Math.max(...big.map(e => e.file.size)))}). Velvet decrypts a video into memory to play it, so ${isIOS ? 'an iPhone may not be able to play files this big' : 'playback needs that much free RAM'}. Import anyway?`, 'Import anyway'))) return { done: 0, dup: 0, failed: 0 };
   const folderCols = new Map();
-  let done = 0, failed = 0;
+  let done = 0, failed = 0, dup = 0, n = 0;
   for (const e of ok) {
-    const f = e.file, mime = mimeOf(f), type = mime.startsWith('video') ? 'video' : 'photo';
-    progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, done / ok.length);
-    const id = uid();
+    let f = e.file; const mime = mimeOf(f), type = mime.startsWith('video') ? 'video' : 'photo';
+    progress(`${opt.label || 'Importing'} ${++n} of ${ok.length} · ${f.name}`, (n - 1) / ok.length);
+    const id = uid(); let qh = null, fh = null;
     try {
+      if (e.load) f = new File([await e.load()], f.name, { type: mime, lastModified: f.lastModified });   // Electron folder sync: read one file at a time
+      // v1.6: skip files that are already in Velvet (Library, Vault or Archive), matched by content
+      try { const d = await findDuplicate(f); qh = d.qh; fh = d.fh; if (d.dup) { dup++; e.result = 'dup'; continue; } } catch (er) { console.warn('dedupe', f.name, er); }
       let th = null, thErr = null; try { th = await withTimeout(makeThumb(f, type, mime), isIOS ? 90000 : 45000); } catch (err) { thErr = err.message === 'timeout' ? new Error(`preview timed out after ${isIOS ? 90 : 45} s`) : err; console.warn('thumb failed', f.name, err); }
       if (type === 'photo' && !th && !Thumbs.isHeic(mime, f.name)) throw new Error('This image format can’t be displayed here');
       const res = await Store.putFile(id, f, p => progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, (done + p * .95) / ok.length));
       let thumb = null;
       if (th && th.blob) { const tr = await Store.putFile(id + '_t', th.blob); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
-      const it = { id, type, title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Untitled', name: f.name, ext: extOf(f.name), mime, size: f.size, chunks: res.chunks, stored: res.stored,
+      const it = { qh, fh: fh || undefined, id, type, title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Untitled', name: f.name, ext: extOf(f.name), mime, size: f.size, chunks: res.chunks, stored: res.stored,
         added: Date.now() + done, modified: f.lastModified || null, taken: await Vision.captureDate(f, mime), tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h, codec: th && th.codec || '', thumbT: th && th.t != null ? th.t : null };
       notePreview(it, th, thErr);
       if (colId && colById(colId)) it.cols.push(colId);
@@ -731,16 +745,77 @@ async function importFiles(entries, colId) {
         if (!c) { c = { id: uid(), name: e.folder.slice(0, 60), cover: null, created: Date.now() }; idx.collections.push(c); }
         folderCols.set(e.folder, c); if (!it.cols.includes(c.id)) it.cols.push(c.id);
       }
-      idx.items.push(it); done++;
+      idx.items.push(it); done++; e.result = 'ok';
       if (done % 5 === 0) await save();
     } catch (err) {
-      failed++; console.warn('import failed', f.name, err); await Store.deleteFile(id).catch(() => { }); await Store.deleteFile(id + '_t').catch(() => { });
+      failed++; e.result = 'fail'; console.warn('import failed', f.name, err); await Store.deleteFile(id).catch(() => { }); await Store.deleteFile(id + '_t').catch(() => { });
       if (err && (err.name === 'QuotaExceededError' || /quota/i.test(err.message))) { toast('Storage is full, so the import stopped.', 5000); break; }
     }
   }
+  if (opt.src) folderCols.forEach(c => { if (!c.src) c.src = { path: opt.src, auto: false, known: [], last: Date.now() }; });
   await save(); progress(null); render(); if (aiOn() && done) setTimeout(startAI, 800);
-  toast(`Added ${done} item${done === 1 ? '' : 's'}${failed ? ` · ${failed} couldn’t be imported` : ''}${skipped ? ` · ${skipped} skipped` : ''}${folderCols.size ? ` · ${folderCols.size} collection${folderCols.size > 1 ? 's' : ''} created from folders` : ''}`, 4000);
+  const msg = [done || !dup ? `Added ${done} item${done === 1 ? '' : 's'}` : '', dup ? `${dup} already in Velvet, skipped` : '', failed ? `${failed} couldn’t be imported` : '', skipped ? `${skipped} not photos or videos` : '',
+    folderCols.size ? `${folderCols.size} collection${folderCols.size > 1 ? 's' : ''} created from folders` : ''].filter(Boolean).join(' · ');
+  if (!opt.quiet || done) toast(msg.replace(/^./, c => c.toUpperCase()), 4500);
+  return { done, dup, failed, cols: [...folderCols.values()] };
 }
+/* ---------- duplicates on import (v1.6) ---------- */
+const storedReader = it => Store.rangeReader(it.id, it.chunks, it.size);
+async function findDuplicate(f) {
+  const rd = Dedupe.fileReader(f), same = idx.items.filter(i => i.size === f.size && i.chunks && i.type !== undefined);
+  if (!same.length) return { dup: false, qh: await Dedupe.quick(rd) };   // nothing of this exact size: certainly new
+  const qh = await Dedupe.quick(rd); let fh = null;
+  for (const c of same) {
+    if (!c.qh) { try { c.qh = await Dedupe.quick(storedReader(c)); } catch (e) { continue; } }
+    if (c.qh !== qh) continue;
+    fh = fh || await Dedupe.full(rd);                                      // confirm with a full SHA-256 of both
+    if (!c.fh) { try { c.fh = await Dedupe.full(storedReader(c)); } catch (e) { continue; } }
+    if (c.fh === fh) return { dup: true, qh, fh, of: c };
+  }
+  return { dup: false, qh, fh };
+}
+// fingerprint older items in the background, a few at a time (decrypts only the first/last 64 KB of each)
+let hashTok = 0;
+async function backfillHashes() {
+  const tok = ++hashTok; await new Promise(r => setTimeout(r, 5000)); let k = 0;
+  while (idx && tok === hashTok && Store.isUnlocked()) {
+    const it = idx.items.find(i => !i.qh && i.chunks && !i._qhErr); if (!it) break;
+    try { it.qh = await Dedupe.quick(storedReader(it)); } catch (e) { it._qhErr = 1; }
+    if (++k % 25 === 0) await save().catch(() => { });
+    await new Promise(r => setTimeout(r, 40));
+  }
+  if (k && idx && tok === hashTok) await save().catch(() => { });
+}
+/* ---------- Windows folder sync (v1.6, desktop app only) ---------- */
+// The desktop app remembers the folder a collection came from (inside the encrypted library) and can import new
+// files from it. Velvet only ever reads that folder; it never changes or deletes anything in it.
+const fkey = f => `${f.rel}|${f.size}|${Math.round(f.mtime || 0)}`;
+const folderEntries = (root, files, folder) => files.map(x => ({ file: { name: x.rel.split('/').pop(), size: x.size, type: '', lastModified: x.mtime || Date.now() }, folder, key: fkey(x), load: () => host.readFolderFile(root, x.rel) }));
+async function importFolderDesktop() {
+  let r; try { r = await host.pickFolder(); } catch (e) { toast('Couldn’t open that folder: ' + (e.message || e), 4000); return; }
+  if (!r) return;
+  if (!r.files.length) { toast(`No photos or videos in “${r.name}”`); return; }
+  const entries = folderEntries(r.root, r.files, r.name);
+  const res = await importFiles(entries, null, { src: r.root });
+  const c = (res.cols || [])[0]; if (c && c.src && c.src.path === r.root) { c.src.known = entries.filter(e => e.result === 'ok' || e.result === 'dup').map(e => e.key); c.src.last = Date.now(); await save(); }
+}
+async function checkFolder(c, { quiet = false } = {}) {
+  if (!host || !host.listFolder || !c || !c.src) return 0;
+  let r; try { r = await host.listFolder(c.src.path); } catch (e) { r = { ok: false, why: e.message || String(e) }; }
+  if (!r || !r.ok) { if (!quiet) toast(`Couldn’t open the folder for “${c.name}”. ${r && r.why ? r.why : ''}`.trim(), 5000); return 0; }
+  const now = new Set(r.files.map(fkey)), known = new Set((c.src.known || []).filter(k => now.has(k))), fresh = r.files.filter(f => !known.has(fkey(f)));
+  c.src.last = Date.now();
+  if (!fresh.length) { c.src.known = [...known]; await save(); if (!quiet) toast(`No new files in “${c.name}”`); if (view === 'collection') renderCollection(); return 0; }
+  const entries = folderEntries(c.src.path, fresh, null), res = await importFiles(entries, c.id, { quiet, label: 'Checking folder ·' });
+  entries.forEach(e => { if (e.result === 'ok' || e.result === 'dup') known.add(e.key); }); c.src.known = [...known]; await save();
+  if (view === 'collection' && curCol === c.id) renderCollection();
+  return res.done;
+}
+async function autoCheckFolders() {
+  if (!host || !host.listFolder) return; await new Promise(r => setTimeout(r, 3000));
+  for (const c of (idx ? idx.collections : []).filter(x => x.src && x.src.auto)) { if (!idx || !Store.isUnlocked()) return; await checkFolder(c, { quiet: true }).catch(e => console.warn('folder check', e)); }
+}
+const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(t).toLocaleDateString(); };
 // drag & drop (files and whole folders)
 async function readEntry(entry, top, out) {
   if (entry.isFile) { await new Promise(res => entry.file(f => { out.push({ file: f, folder: top }); res(); }, res)); return; }
@@ -790,7 +865,7 @@ async function startAI() {
       onProgress: p => { aiProg = p; drawAIChip(); const s = $('#aiStatus'); if (s) s.textContent = aiStatusText(); },
       onItem: () => { } });
   } catch (e) { console.warn('AI indexing', e); aiProg = { phase: 'error' }; drawAIChip(); toast('On-device AI couldn’t start: ' + (e.message || e)); }
-  if (idx && Store.isUnlocked()) { smartCache = null; await applyRules().catch(e => console.warn('rules', e)); }
+  if (idx && Store.isUnlocked()) { smartCache = null; await applyCustomTags({ quiet: true }).catch(e => console.warn('custom tags', e)); await applyRules().catch(e => console.warn('rules', e)); }
   if (idx && (view === 'search' || view === 'profile' || view === 'library' || view === 'collections')) render();
   if (peopleOn() && idx && Store.isUnlocked() && !AI.isRunning()) startPeople();
 }
@@ -802,6 +877,7 @@ function aiCard() {
     ${ROW({ ic: 'image', c: '#3B7FD1', t: 'Duplicates & look-alikes', d: 'Review them side by side and keep the best', id: 'aiDup', tap: 1 })}
     ${ROW({ ic: 'star', c: '#D4A017', t: 'Best shots', d: 'Keep the best of each burst, tuck the rest away', id: 'aiBest', tap: 1 })}
     ${ROW({ ic: 'sliders', c: '#2E9E6B', t: 'Smart rules', d: nr ? `${(idx.settings.rules || []).filter(r => r.on).length} on · move things automatically by tag, look or person` : 'Move things automatically by tag, look or person', id: 'aiRules', tap: 1 })}
+    ${ROW({ ic: 'tag', c: '#C2185B', t: 'Custom tags', d: ctagsOf().length ? `${ctagsOf().length} of your own · teach the AI, rename or hide built-in tags` : 'Teach the AI your own tags, rename or hide built-in ones', id: 'aiCT', tap: 1 })}
     ${ROW({ ic: 'eye', c: '#7E5763', t: 'Hidden auto albums', d: nh ? `${nh} hidden or saved as collections` : 'None. Hide an auto album from its ••• menu', id: 'aiHid', tap: 1 })}
     ${peopleCardRows()}
     ${ROW({ ic: 'disk', c: '#7E5763', t: 'AI data', d: `Encrypted on this device. Model ≈ ${AI.MODEL_MB} MB, downloaded once`, right: `<span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe">Remove</button>` })}` : ''}
@@ -820,7 +896,7 @@ function bindAICard() {
   };
   bindPeopleCard();
   const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
-  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const hb = $('#aiHid'); if (hb) hb.onclick = hiddenAlbumsDialog; const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
+  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const hb = $('#aiHid'); if (hb) hb.onclick = hiddenAlbumsDialog; const ctb = $('#aiCT'); if (ctb) ctb.onclick = () => nav('tags'); const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
   const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
 }
 /* ---------- People (v1.4): on-device face grouping ---------- */
@@ -1009,7 +1085,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v9';
+const SW_VER = 'velvet-v10';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -1196,11 +1272,12 @@ async function addToCollections(ids) {
 }
 async function itemSheet(it) {
   if (!it) return;
-  const tags = (it.tags || []).slice(), aiT = (it.aiTags || []).slice(), aiRej = (it.aiRej || []).slice();
+  const tags = (it.tags || []).slice(), aiHid = (it.aiTags || []).filter(t => TV.hidden(t)), aiT = (it.aiTags || []).filter(t => !TV.hidden(t)), aiRej = (it.aiRej || []).slice(), ctT = (it.ct || []).map(ctById).filter(t => t && !t.hidden), ctNo = [];
   const res = await modal(`<h3>Details</h3><div class="meta-line">${it.type === 'video' ? 'Video' : 'Photo'} · ${bytes(it.size)}${it.w ? ` · ${it.w}×${it.h}` : ''}${it.dur ? ' · ' + fmt(it.dur) : ''} · added ${new Date(it.added).toLocaleDateString()}</div>
     <span class="lbl">Title</span><input class="field" id="tTitle" value="${esc(it.title)}" maxlength="80">
     <span class="lbl">Tags</span><div class="taged" id="tTags"></div>
-    ${(it.aiTags || []).length ? `<span class="lbl">AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· suggested on this device. Tap ✓ to keep or × to remove</small></span><div class="taged ai" id="tAI"></div>` : ''}
+    ${ctT.length ? `<span class="lbl">Your AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· tap × if it’s wrong. The tag learns from it</small></span><div class="taged ai" id="tCT">${ctT.map(t => `<span class="tag ai" data-ctw="${t.id}">${IC.spark}${esc(t.name)}<button data-ctno="${t.id}" aria-label="Not ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}
+    ${aiT.length ? `<span class="lbl">AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· suggested on this device. Tap ✓ to keep or × to remove</small></span><div class="taged ai" id="tAI"></div>` : ''}
     <span class="lbl">Collections</span><div class="clist">${idx.collections.map(c => `<label><input type="checkbox" value="${c.id}" ${it.cols.includes(c.id) ? 'checked' : ''}>${esc(c.name)}${c.cover === it.id ? ' <small style="color:var(--mag2)">· cover</small>' : ''}</label>`).join('') || '<span style="color:var(--dim);font-size:13px">No collections yet. Create one in Collections.</span>'}</div>
     <div class="menu" style="margin-top:14px">
       <button data-a="fav">${IC.heart}${it.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
@@ -1213,17 +1290,20 @@ async function itemSheet(it) {
     const draw = () => { box.innerHTML = tags.map((t, i) => `<span class="tag on">${esc(t)}<button data-x="${i}" aria-label="Remove">×</button></span>`).join('') + `<input id="tIn" placeholder="Add a tag and press Enter" autocomplete="off">`; const inp = box.querySelector('#tIn');
       inp.onkeydown = e => { if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) { e.preventDefault(); const v = inp.value.trim().toLowerCase().slice(0, 30); if (!tags.includes(v)) tags.push(v); draw(); box.querySelector('#tIn').focus(); } else if (e.key === 'Backspace' && !inp.value && tags.length) { tags.pop(); draw(); box.querySelector('#tIn').focus(); } }; };
     draw(); box.addEventListener('click', e => { const x = e.target.closest('[data-x]'); if (x) { tags.splice(+x.dataset.x, 1); draw(); } });
+    const ctBox = m.querySelector('#tCT'); if (ctBox) ctBox.addEventListener('click', e => { const no = e.target.closest('[data-ctno]'); if (!no) return; ctNo.push(no.dataset.ctno); const w = ctBox.querySelector(`[data-ctw="${no.dataset.ctno}"]`); if (w) w.remove(); });
     const aiBox = m.querySelector('#tAI');
-    const drawAI = () => { if (!aiBox) return; aiBox.innerHTML = aiT.map((t, i) => `<span class="tag ai">${IC.spark}${esc(t)}<button data-aiok="${i}" aria-label="Keep tag">✓</button><button data-aino="${i}" aria-label="Remove tag">×</button></span>`).join('') || '<span style="color:var(--dim);font-size:13px">No AI suggestions left</span>'; };
+    const drawAI = () => { if (!aiBox) return; aiBox.innerHTML = aiT.map((t, i) => `<span class="tag ai">${IC.spark}${esc(TV.show(t) || t)}<button data-aiok="${i}" aria-label="Keep tag">✓</button><button data-aino="${i}" aria-label="Remove tag">×</button></span>`).join('') || '<span style="color:var(--dim);font-size:13px">No AI suggestions left</span>'; };
     drawAI(); if (aiBox) aiBox.addEventListener('click', e => { const ok = e.target.closest("[data-aiok]"), no = e.target.closest("[data-aino]");
-      if (ok) { const t = aiT.splice(+ok.dataset.aiok, 1)[0]; if (!tags.includes(t)) tags.push(t); draw(); drawAI(); }
+      if (ok) { const t0 = aiT.splice(+ok.dataset.aiok, 1)[0], t = TV.show(t0) || t0; aiRej.push(t0); if (!tags.includes(t)) tags.push(t); draw(); drawAI(); }
       if (no) { const t = aiT.splice(+no.dataset.aino, 1)[0]; aiRej.push(t); drawAI(); } });
     const collect = () => { const inp = box.querySelector('#tIn'); if (inp && inp.value.trim()) { const v = inp.value.trim().toLowerCase(); if (!tags.includes(v)) tags.push(v); } return { title: m.querySelector('#tTitle').value.trim() || it.title, cols: Array.from(m.querySelectorAll('.clist input:checked')).map(i => i.value) }; };
     m.querySelector('[data-ok]').onclick = () => close({ a: 'done', ...collect() });
     m.querySelectorAll('[data-a]').forEach(b => b.onclick = () => close({ a: b.dataset.a, ...collect() }));
   });
   if (!res) return;
-  it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)); it.aiRej = aiRej; } await save(); applyRules({ ids: [it.id] });
+  it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)).concat(aiHid); it.aiRej = aiRej; }
+  if (ctNo.length) { ctNo.forEach(cid => { const t = ctById(cid); if (t) CT.confirm(t, it.id, false); }); it.ct = (it.ct || []).filter(x => !ctNo.includes(x)); bumpCT(); toast(ctNo.length > 1 ? 'Tags updated. They’ll learn from this' : `Got it: not “${ctById(ctNo[0]).name}”`); }
+  await save(); applyRules({ ids: [it.id] });
   if (res.a === 'fav') toggleFav(it);
   else if (res.a === 'cover') { it.cols.forEach(cid => { const c = colById(cid); if (c) c.cover = it.id; }); await save(); toast('Cover updated'); }
   else if (res.a === 'vault') { closeLightbox(); closePlayer(); setVault([it.id], !it.vault); return; }
@@ -1309,7 +1389,7 @@ async function viewOptions() {
     phone ? 'Tip: pinch the grid to zoom' : '');
   if (k === 'in') setZoom(-1); else if (k === 'out') setZoom(1);
   else if (k === 'shape') { const s = idx.settings.grid = idx.settings.grid || {}; s.fit = !g.fit; s.zoom = 0; await save(); render(); }
-  else if (k === 'select') toggleSelect(); else if (k === 'folder') $('#folder').click();
+  else if (k === 'select') toggleSelect(); else if (k === 'folder') pickFolder();
 }
 /* auto album ⋯ menu */
 async function smartMenu() {
@@ -1640,12 +1720,13 @@ async function saveReelItem(blob, r, dur, w, h) {
 /* ---------- smart albums, best shots, archive, smart rules (v1.2) ---------- */
 let smartCache = null;
 const isSmart = id => typeof id === 'string' && id.startsWith('smart:');
-const smartKey = () => [idx.items.length, AI.stats(idx).indexed, idx.items.reduce((a, i) => a + (i.aiTags || []).length * 3 + (i.tags || []).length * 7 + (i.vault ? 11 : 0) + (i.archived ? 13 : 0), 0)].join(':');
+const smartKey = () => [idx.items.length, AI.stats(idx).indexed, idx.settings.ctagsV || 0, idx.items.reduce((a, i) => a + (i.aiTags || []).length * 3 + (i.tags || []).length * 7 + (i.ct || []).length * 5 + (i.vault ? 11 : 0) + (i.archived ? 13 : 0), 0)].join(':');
 async function getSmart(force) {
   if (!aiOn()) return [];
   await AI.open(idx); const k = smartKey();
   if (!force && smartCache && smartCache.key === k) return smartCache.albums;
-  const albums = await Smart.smartAlbums(visible()); smartCache = { key: k, albums }; return albums;
+  const vis = visible(), custom = ctagsOf().filter(t => !t.hidden).map(t => ({ id: 'smart:ct:' + t.id, kind: 'custom', ct: t.id, name: t.name, sub: 'Your AI tag', ids: vis.filter(i => (i.ct || []).includes(t.id)).map(i => i.id) })).filter(a => a.ids.length);
+  const albums = custom.concat(await Smart.smartAlbums(vis)); smartCache = { key: k, albums }; return albums;
 }
 const smartById = id => smartCache && smartCache.albums.find(a => a.id === id);
 // auto albums the user saved as a collection or hid (kept in the encrypted index, so also in backups)
@@ -1661,7 +1742,7 @@ async function hiddenAlbumsDialog() {
   });
   if (view === 'profile') renderProfile(); else render();
 }
-const KINDL = { place: 'Places', theme: 'Themes', moment: 'Moments' };
+const KINDL = { custom: 'Your AI tags', place: 'Places', theme: 'Themes', moment: 'Moments' };
 const smartCover = a => a.ids.map(itemById).filter(Boolean).sort((x, y) => AI.quality(y) - AI.quality(x))[0];
 async function renderSmartAlbums() {
   const el = $('#smartAlbums'); if (!el) return;
@@ -1685,10 +1766,11 @@ async function renderSmartCollection() {
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
   h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="hero-fade"></div>
     <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
-    <div class="hero-actions"><button class="btn btn-primary btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
+    <div class="hero-actions">${a.ct ? `<button class="btn btn-primary btn-sm" id="smRev">${IC.check || IC.spark}<span>Review</span></button><button class="btn btn-ghost btn-sm" id="smEdit">${IC.edit}<span>Edit tag</span></button>` : `<button class="btn btn-primary btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button>`}</div>`;
   hydrateCovers(h); h.classList.toggle('nocover', !cv);
-  $('#smReel').onclick = () => openReel(items, a.name);
-  $('#smSave').onclick = async () => {
+  if (a.ct) { const t = ctById(a.ct); $('#smRev').onclick = () => t && ctReview(t); $('#smEdit').onclick = () => t && ctEditor(t); }
+  else { $('#smReel').onclick = () => openReel(items, a.name); }
+  if (!a.ct) $('#smSave').onclick = async () => {
     const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
     const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
     items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await hideSmart(a, 'saved', { col: c.id }); toast(`Saved “${c.name}”. The auto album is now hidden`); openCollection(c.id);
@@ -1777,7 +1859,7 @@ function renderRules() {
 }
 async function addRuleDialog(pre = {}) {
   const PL = peopleOn() && People.isOpen() ? peopleList({ hidden: true }) : [];
-  const tags = [...new Set(idx.items.flatMap(i => [...(i.tags || []), ...(i.aiTags || [])]))].sort();
+  const tags = [...new Set(idx.items.flatMap(i => [...TV.all(i)]))].sort();
   const res = await modal(`<h3>New smart rule</h3>
     <div class="rule-form"><label class="fl">When an item is</label><select class="field" id="rKind"><option value="tag">tagged</option>${AI.hasIndex() ? '<option value="search">looking like (AI search)</option>' : ''}${PL.length ? '<option value="person">showing a person (People)</option>' : ''}</select>
     <input class="field" id="rVal" placeholder="e.g. beach" list="rTags" autocomplete="off"><datalist id="rTags">${tags.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
@@ -1792,7 +1874,7 @@ async function addRuleDialog(pre = {}) {
       const r = { id: '_', kind: m.querySelector('#rKind').value, value: v, action: 'vault' }; const n = (await Smart.matchRule(r, idx.items.filter(i => !i.vault))).length; p.textContent = `${n} item${n === 1 ? '' : 's'} in your library match right now.`; };
     let t; m.querySelector('#rVal').addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 350); }); kindEl.onchange = prev; if (perEl) perEl.onchange = prev;
     if (pre.person && perEl) { kindEl.value = 'person'; perEl.value = pre.person; prev(); }
-    m.querySelector('[data-ok]').onclick = () => { const v = getVal(); if (!v) { valEl.focus(); return; } close({ kind: kindEl.value, value: v.slice(0, 80), act: m.querySelector('#rAct').value, now: m.querySelector('#rNow').checked }); };
+    m.querySelector('[data-ok]').onclick = () => { const v = getVal(); if (!v) { valEl.focus(); return; } if (kindEl.value !== 'person' && AI.blockedTerm(v)) { toast(AI.BLOCKED_MSG, 5000); valEl.focus(); return; } close({ kind: kindEl.value, value: v.slice(0, 80), act: m.querySelector('#rAct').value, now: m.querySelector('#rNow').checked }); };
   });
   if (!res || typeof res !== 'object') return;
   let action = 'vault', col = null;
@@ -1802,6 +1884,150 @@ async function addRuleDialog(pre = {}) {
   if (!res.now) idx.items.forEach(it => { it.ruled = [...(it.ruled || []), r.id]; });   // only future items
   rulesOf().push(r); await save(); if (view === 'rules') renderRules();
   const n = await applyRules({ only: [r.id] }); if (!n) toast('Rule created'); if (view === 'rules') renderRules();
+}
+
+/* ---------- custom AI tags + built-in tag aliases (v1.6) ---------- */
+const ctagsOf = () => (idx.settings.ctags = idx.settings.ctags || []);
+const ctById = id => ctagsOf().find(t => t.id === id);
+const aliasOf = () => (idx.settings.tagAlias = idx.settings.tagAlias || {});
+function bumpCT() { idx.settings.ctagsV = (idx.settings.ctagsV || 0) + 1; refreshTV(); }
+const ctLast = new Map();            // tag id -> last run result (memory only, cleared on lock)
+// score every indexed item for each custom tag and store membership on the item (it.ct = [tag ids])
+async function applyCustomTags({ only = null, quiet = false } = {}) {
+  if (!aiOn() || !ctagsOf().length) return 0;
+  await AI.open(idx); if (!AI.hasIndex()) return 0;
+  const ids = AI.indexedIds().filter(id => itemById(id)); let n = 0;
+  for (const t of ctagsOf()) {
+    if (only && !only.includes(t.id)) continue;
+    const res = await CT.run(t, ids); if (!idx) return 0; ctLast.set(t.id, res);
+    const hit = new Set(res.ids);
+    idx.items.forEach(it => { const had = (it.ct || []).includes(t.id), has = hit.has(it.id); if (had && !has) it.ct = it.ct.filter(x => x !== t.id); else if (!had && has) { it.ct = [...(it.ct || []), t.id]; n++; } });
+    t.count = hit.size; t.ran = Date.now();
+  }
+  bumpCT(); await save();
+  if (!quiet && view === 'tags') renderTags();
+  return n;
+}
+const ctLine = t => `${plural(t.count || 0, 'item')} · ${(t.pos || []).length} example${(t.pos || []).length === 1 ? '' : 's'}${(t.neg || []).length ? ` · ${(t.neg || []).length} “not this”` : ''}${t.hidden ? ' · album hidden' : ''}`;
+function builtinTags() {
+  const m = new Map(); idx.items.forEach(i => (i.aiTags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+  Object.keys(aliasOf()).forEach(t => { if (!m.has(t)) m.set(t, 0); });
+  return [...m.entries()].filter(([t]) => !AI.isBlockedTag(t)).sort((a, b) => b[1] - a[1]);
+}
+function aliasNote(t) { const a = aliasOf()[t]; if (!a) return ''; if (a.into) return `merged into “${TV.show(a.into) || a.into}”`; if (a.hidden) return 'hidden'; if (a.name) return `renamed from “${t}”`; return ''; }
+function renderTags() {
+  const body = $('#tagsBody'); if (!body) return;
+  if (!aiOn()) { body.innerHTML = emptyHTML('spark', 'Turn on on-device AI first', 'Custom tags use the same on-device AI as smart search. Turn it on in Profile.'); return; }
+  const T = ctagsOf(), B = builtinTags();
+  body.innerHTML = `<p class="sub-note">Teach Velvet your own tags. Give a name, describe it in a few words, and pick a few example photos. The AI tags matching items on this device, and each tag gets its own auto album.</p>
+    ${GROUP('Your tags', T.map(t => ROW({ ic: 'spark', c: '#FF2E88', t: esc(t.name), d: ctLine(t), id: 'ct-' + t.id, tap: 1, attr: `data-ct="${t.id}"`, right: `<span class="v">${t.count || 0}</span>` })).concat([
+      ROW({ ic: 'plus', c: '#2E9E6B', t: 'New tag', d: 'Name it, describe it, show a few examples', id: 'ctNew', tap: 1 })]))}
+    ${GROUP('Built-in tags', B.length ? B.slice(0, 80).map(([t, n]) => { const sh = TV.show(t), note = aliasNote(t);
+      return ROW({ ic: aliasOf()[t] && aliasOf()[t].hidden ? 'eye' : 'tag', c: '#7E5763', t: esc(aliasOf()[t] && (aliasOf()[t].into || aliasOf()[t].hidden) ? t : (sh || t)), d: note ? esc(note) : 'Suggested by on-device AI', tap: 1, id: 'bt-' + B.findIndex(x => x[0] === t), attr: `data-bt="${esc(t)}"`, right: `<span class="v">${n}</span>` }); })
+      : [ROW({ ic: 'tag', c: '#7E5763', t: 'No AI tags yet', d: 'They appear once on-device AI has looked at your photos' })])}
+    <p class="sub-note">Renaming, hiding or merging a built-in tag changes how it’s shown in Search, auto albums and rules. The AI keeps working as before.</p>`;
+  hydrateIcons(body);
+  body.querySelectorAll('[data-ct]').forEach(b => b.onclick = () => ctMenu(ctById(b.dataset.ct)));
+  body.querySelectorAll('[data-bt]').forEach(b => b.onclick = () => builtinMenu(b.dataset.bt));
+  $('#ctNew').onclick = () => ctEditor(null);
+}
+async function ctMenu(t) {
+  if (!t) return;
+  const r = await actionSheet(t.name, [{ r: 'review', label: `Review: “Is this ${t.name}?”`, ic: 'check' }, { r: 'open', label: 'Open album', ic: 'spark' }, { r: 'edit', label: 'Edit tag', ic: 'edit' },
+    { r: 'hide', label: t.hidden ? 'Show album' : 'Hide album', ic: 'eye' }, { r: 'delete', label: 'Delete tag', ic: 'trash', danger: true }], ctLine(t));
+  if (r === 'review') ctReview(t); else if (r === 'edit') ctEditor(t);
+  else if (r === 'open') { await getSmart(true); if (smartById('smart:ct:' + t.id)) openCollection('smart:ct:' + t.id); else toast('Nothing has this tag yet. Try adding examples or raising the sensitivity.', 4000); }
+  else if (r === 'hide') { t.hidden = !t.hidden; bumpCT(); await save(); renderTags(); toast(t.hidden ? `“${t.name}” album hidden` : `“${t.name}” album shown`); }
+  else if (r === 'delete') {
+    const pos = ctagsOf().indexOf(t), had = idx.items.filter(i => (i.ct || []).includes(t.id)).map(i => i.id);
+    idx.settings.ctags = ctagsOf().filter(x => x !== t); idx.items.forEach(i => { if (i.ct) i.ct = i.ct.filter(x => x !== t.id); }); bumpCT(); await save(); renderTags(); UI.haptic();
+    toast(`Deleted “${t.name}”`, 0, { undo: async () => { if (!idx) return; ctagsOf().splice(pos, 0, t); had.forEach(id => { const it = itemById(id); if (it) it.ct = [...new Set([...(it.ct || []), t.id])]; }); bumpCT(); await save(); if (view === 'tags') renderTags(); } });
+  }
+}
+// pick example photos: tap once = "yes, like this", twice = "not this", three times = clear
+async function ctPicker(name, pos, neg) {
+  const P = new Set(pos), N = new Set(neg), ids = new Set(AI.indexedIds());
+  const list = sortNew(idx.items.filter(i => ids.has(i.id) && !i.archived && (!i.vault || vaultOpen))).slice(0, 400);
+  const res = await modal(`<h3>Examples for “${esc(name || 'your tag')}”</h3><p>Tap photos that <b>are</b> ${esc(name || 'it')} (✓). Tap again for <b>not this</b> (✕). A few of each is plenty.</p>
+    <div class="ctpick" id="ctPick">${list.map(i => `<button class="ctp${P.has(i.id) ? ' yes' : N.has(i.id) ? ' no' : ''}" data-cp="${i.id}" aria-label="${esc(i.title)}"><img alt="" data-tid="${i.id}"><i class="m"></i></button>`).join('') || '<p class="hint-line">Nothing indexed yet. Let on-device AI finish first.</p>'}</div>
+    <p class="sub-note" id="ctPickN"></p><div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button><button class="btn btn-primary" id="ctPickOk">Done</button></div>`, (m, close) => {
+    hydrateCovers(m); const cnt = () => { m.querySelector('#ctPickN').textContent = `${P.size} yes · ${N.size} not this`; }; cnt();
+    m.querySelector('#ctPick').addEventListener('click', e => { const b = e.target.closest('[data-cp]'); if (!b) return; const id = b.dataset.cp;
+      if (P.has(id)) { P.delete(id); N.add(id); } else if (N.has(id)) N.delete(id); else P.add(id); b.classList.toggle('yes', P.has(id)); b.classList.toggle('no', N.has(id)); UI.haptic(); cnt(); });
+    m.querySelector('#ctPickOk').onclick = () => close({ pos: [...P], neg: [...N] });
+  }, { cls: 'tall' });
+  return res && typeof res === 'object' ? res : null;
+}
+async function ctEditor(t0) {
+  if (!aiOn()) { toast('Turn on on-device AI in Profile first'); return; }
+  const t = t0 ? JSON.parse(JSON.stringify(t0)) : { id: 'ct' + uid(), name: '', phrase: '', pos: [], neg: [], sens: .5, created: Date.now() };
+  const others = ctagsOf().filter(x => x.id !== t.id).map(x => x.name);
+  const res = await modal(`<h3>${t0 ? 'Edit tag' : 'New tag'}</h3>
+    <div class="rule-form ct-form"><label class="fl" for="ctName">Name</label><input class="field" id="ctName" maxlength="40" placeholder="e.g. Cozy evenings" value="${esc(t.name)}" autocomplete="off">
+    <label class="fl" for="ctPhrase">Describe it (optional)</label><input class="field" id="ctPhrase" maxlength="80" placeholder="e.g. candles and warm lamp light indoors" value="${esc(t.phrase || '')}" autocomplete="off">
+    <label class="fl">Examples (optional)</label><button class="btn btn-ghost ctex" id="ctEx">${IC.image}<span id="ctExN"></span></button>
+    <label class="fl" for="ctSens">Sensitivity</label><div class="ctsens"><small>Fewer, surer</small><input type="range" id="ctSens" min="0" max="100" value="${Math.round((t.sens != null ? t.sens : .5) * 100)}" aria-label="Sensitivity"><small>More</small></div>
+    <p class="sub-note" id="ctPrev">Matches are worked out on this device.</p><p class="ct-err" id="ctErr" role="alert"></p></div>
+    <div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button><button class="btn btn-primary" id="ctSave">${t0 ? 'Save' : 'Create tag'}</button></div>`, (m, close) => {
+    const nameEl = m.querySelector('#ctName'), phEl = m.querySelector('#ctPhrase'), err = m.querySelector('#ctErr'), prev = m.querySelector('#ctPrev');
+    const exN = () => { m.querySelector('#ctExN').textContent = t.pos.length || t.neg.length ? `${t.pos.length} like this · ${t.neg.length} not this` : 'Choose example photos'; }; exN();
+    const check = () => { const e = CT.checkName(nameEl.value, { phrase: phEl.value, others }); err.textContent = e && nameEl.value.trim() ? e : (AI.blockedTerm(phEl.value) ? AI.BLOCKED_MSG : ''); return e; };
+    let pt, tok = 0; const preview = () => { clearTimeout(pt); pt = setTimeout(async () => { const my = ++tok; t.name = CT.clean(nameEl.value); t.phrase = CT.clean(phEl.value); t.sens = +m.querySelector('#ctSens').value / 100;
+      if (check() || (!t.name && !t.pos.length)) { prev.textContent = 'Matches are worked out on this device.'; return; }
+      if (!AI.hasIndex()) { prev.textContent = 'On-device AI is still indexing. The tag will apply when it’s done.'; return; }
+      prev.textContent = 'Checking your library…';
+      try { const r = await CT.run(t, AI.indexedIds().filter(id => itemById(id))); if (my === tok) prev.textContent = `Matches ${plural(r.ids.length, 'item')} right now.`; } catch (e) { if (my === tok) prev.textContent = 'Couldn’t check right now: ' + (e.message || e); } }, 450); };
+    nameEl.addEventListener('input', preview); phEl.addEventListener('input', preview); m.querySelector('#ctSens').addEventListener('change', preview); m.querySelector('#ctSens').addEventListener('input', () => { t.sens = +m.querySelector('#ctSens').value / 100; });
+    m.querySelector('#ctEx').onclick = async () => { const r = await ctPicker(CT.clean(nameEl.value), t.pos, t.neg); if (r) { t.pos = r.pos.slice(-CT.MAX_EX); t.neg = r.neg.slice(-CT.MAX_EX); exN(); preview(); } };
+    m.querySelector('#ctSave').onclick = () => { const e = check(); if (e) { err.textContent = e; nameEl.focus(); return; } if (AI.blockedTerm(phEl.value)) { err.textContent = AI.BLOCKED_MSG; phEl.focus(); return; }
+      t.name = CT.clean(nameEl.value); t.phrase = CT.clean(phEl.value); t.sens = +m.querySelector('#ctSens').value / 100; close('save'); };
+    if (t0) preview();
+  });
+  if (res !== 'save') return;
+  if (t0) Object.assign(t0, t); else ctagsOf().push(t);
+  bumpCT(); await save();
+  const n = await applyCustomTags({ only: [t.id] }).catch(e => { console.warn('custom tag', e); return 0; });
+  const tt = ctById(t.id); toast(`“${tt.name}”: ${plural(tt.count || 0, 'item')} tagged`, 3500);
+  await applyRules().catch(() => { });
+  if (view === 'tags') renderTags(); else render();
+  return tt;
+}
+// "Is this X?": one suggestion at a time, least certain first; answers become examples and re-calibrate the tag
+async function ctReview(t) {
+  if (!t) return; await applyCustomTags({ only: [t.id], quiet: true });
+  const res = ctLast.get(t.id); const q = res ? CT.reviewQueue(t, res).filter(id => { const it = itemById(id); return it && !it.archived && (!it.vault || vaultOpen); }) : [];
+  if (!q.length) { toast(`Nothing to review for “${t.name}” right now`); return; }
+  let i = 0, yes = 0, no = 0;
+  await modal(`<h3 id="rvH"></h3><div class="ctrev"><img alt="" id="rvImg"></div><p class="sub-note" id="rvN"></p>
+    <div class="actions three"><button class="btn btn-ghost" id="rvNo">${IC.close}<span>No</span></button><button class="btn btn-ghost" id="rvSkip">Skip</button><button class="btn btn-primary" id="rvYes">${IC.check}<span>Yes</span></button></div>
+    <div class="actions"><button class="btn btn-ghost" data-r="">Done</button></div>`, (m, close) => {
+    const show = () => { if (i >= q.length) { close(); return; } const it = itemById(q[i]); m.querySelector('#rvH').textContent = `Is this “${t.name}”?`;
+      const img = m.querySelector('#rvImg'); img.classList.remove('ok'); img.removeAttribute('src'); img.dataset.tid = it.id; img.setAttribute('alt', it.title); hydrateCovers(m); m.querySelector('#rvN').textContent = `${i + 1} of ${q.length}`; };
+    const ans = v => { if (v != null) { CT.confirm(t, q[i], v); v ? yes++ : no++; UI.haptic(); } i++; show(); };
+    m.querySelector('#rvYes').onclick = () => ans(true); m.querySelector('#rvNo').onclick = () => ans(false); m.querySelector('#rvSkip').onclick = () => ans(null); show();
+  });
+  if (!idx) return;
+  if (yes || no) { const before = t.count || 0; await applyCustomTags({ only: [t.id], quiet: true }); await applyRules().catch(() => { }); toast(`Thanks. “${t.name}” learned from ${yes + no} answer${yes + no === 1 ? '' : 's'} · now ${plural(t.count || 0, 'item')}${before !== t.count ? ` (was ${before})` : ''}`, 4000); }
+  if (view === 'tags') renderTags(); else render();
+}
+async function builtinMenu(t) {
+  const A = aliasOf(), a = A[t] || {}, sh = TV.show(t) || t;
+  const r = await actionSheet(sh, [{ r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'merge', label: 'Merge into another tag…', ic: 'tag' }, { r: 'hide', label: a.hidden ? 'Show this tag' : 'Hide this tag', ic: 'eye' },
+    Object.keys(a).length ? { r: 'reset', label: 'Reset to original', ic: 'back' } : null], aliasNote(t) || 'Built-in AI tag');
+  if (!r) return;
+  const before = JSON.parse(JSON.stringify(A[t] || null)), commit = async msg => { bumpCT(); await save(); renderTags(); toast(msg, 0, { undo: async () => { if (!idx) return; if (before) aliasOf()[t] = before; else delete aliasOf()[t]; bumpCT(); await save(); if (view === 'tags') renderTags(); } }); };
+  if (r === 'rename') {
+    const names = builtinTags().map(([x]) => TV.show(x)).filter(x => x && x !== sh).concat(ctagsOf().map(x => x.name));
+    const n = CT.clean(await promptBox(`Rename “${sh}”`, 'Shown everywhere instead of the AI’s word: Search, auto albums and rules.', sh, 'Rename') || ''); if (!n || n === sh) return;
+    const e = CT.checkName(n, { others: names }); if (e) { await modal(`<h3>Can’t use that name</h3><p>${esc(e)}</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+    A[t] = { ...a, name: n.toLowerCase() === t ? undefined : n }; delete A[t].into; if (!A[t].name) delete A[t].name; if (!Object.keys(A[t]).length) delete A[t]; await commit(`Renamed to “${n}”`);
+  } else if (r === 'merge') {
+    const opts = builtinTags().map(([x]) => x).filter(x => x !== t && TV.canon(x) !== t && !TV.hidden(x) && TV.canon(x) === x).slice(0, 14);
+    if (!opts.length) { toast('No other tags to merge with yet'); return; }
+    const k = await actionSheet(`Merge “${sh}” into…`, opts.map((x, i) => ({ r: 'm' + i, label: TV.show(x) || x, ic: 'tag' })), 'Items tagged with either will show the tag you pick.'); if (!k) return;
+    const into = opts[+k.slice(1)]; A[t] = { into }; await commit(`“${sh}” merged into “${TV.show(into) || into}”`);
+  } else if (r === 'hide') { A[t] = { ...a, hidden: !a.hidden }; if (!A[t].hidden) delete A[t].hidden; if (!Object.keys(A[t]).length) delete A[t]; await commit(a.hidden ? `“${sh}” shown again` : `“${sh}” hidden`); }
+  else if (r === 'reset') { delete A[t]; await commit(`“${t}” reset`); }
 }
 
 /* ---------- backup / restore ---------- */
@@ -1881,4 +2107,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

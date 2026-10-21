@@ -37,3 +37,8 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 - grouped Settings in Profile, a 3-card tour, clearer empty screens, and a text size setting;
 - respects Reduce Motion and Reduce Transparency; sidebar layout on desktop;
 - fixes a freeze in WebKit (Safari's engine) when locking or unlocking a large grid.
+
+**New in v1.6:**
+- **custom AI tags**: name a tag, describe it, show a few example photos ("like this" / "not this"), and the on-device AI applies it. Each tag gets its own auto album, works in Search and rules, and learns from "Is this …?" answers. Built-in tags can be renamed, hidden or merged;
+- **no more doubles**: files already in Velvet (including the Vault and the Archive) are recognised by content and skipped on import;
+- **folder sync** in the Windows app: *Check for new files* on a folder collection, optionally each time Velvet opens. Velvet only reads the folder, never changes it.

@@ -9,7 +9,11 @@ const NAMES = { beach: 'Beach days', ocean: 'By the sea', mountains: 'Mountains'
   travel: 'Travel', party: 'Parties', concert: 'Live music', painting: 'Art', 'golden hour': 'Golden hour', neon: 'Neon', winter: 'Winter', summer: 'Summer', autumn: 'Autumn',
   christmas: 'Christmas', island: 'Islands', countryside: 'Countryside', garden: 'Gardens', dress: 'Dresses', 'black & white': 'Black & white', portrait: 'Portraits', wedding: 'Weddings' };
 const title = t => NAMES[t] || t.replace(/\b\w/g, c => c.toUpperCase());
-const tagsOf = it => new Set([...(it.tags || []), ...(it.aiTags || [])]);
+// v1.6: the app supplies a tag view (built-in aliases: rename/hide/merge, plus custom AI tags)
+let TV = null; export const setTagView = v => { TV = v; };
+const tagsOf = it => TV ? TV.all(it) : new Set([...(it.tags || []), ...(it.aiTags || [])]);
+const rawTagsOf = it => { const r = new Set(); for (const t of [...(it.tags || []), ...(it.aiTags || [])]) { if (TV && TV.hidden(t)) continue; r.add(TV ? TV.canon(t) : t); } return r; };
+const albumTitle = t => { const n = TV ? TV.show(t) : t; return n && n !== t ? n.replace(/^\w/, c => c.toUpperCase()) : title(t); };
 export const timeOf = it => it.taken || (it.modified && it.modified < (it.added || Date.now()) - 120000 ? it.modified : null); // capture date; file date only if it isn't just the pick/import time (iOS)
 
 /* ---------- smart albums ---------- */
@@ -19,7 +23,7 @@ export async function smartAlbums(items, { min = 3, maxEach = 10, gapH = 12 } = 
   if (AI.hasIndex()) {
     const voc = await AI.vocabInfo(), group = new Map(voc.tags.map(t => [t[0], t[1]]));
     const by = new Map();
-    for (const it of items) for (const t of tagsOf(it)) if (group.has(t) && !SKIP.has(t) && !AI.isBlockedTag(t)) { if (!by.has(t)) by.set(t, new Set()); by.get(t).add(it.id); }
+    for (const it of items) for (const t of rawTagsOf(it)) if (group.has(t) && !SKIP.has(t) && !AI.isBlockedTag(t)) { if (!by.has(t)) by.set(t, new Set()); by.get(t).add(it.id); }
     const vec = new Map(); for (const it of items) { const v = AI.itemVec(it.id); if (v) vec.set(it.id, v); }
     const cands = [];
     for (const [t, set] of by) {
@@ -31,7 +35,7 @@ export async function smartAlbums(items, { min = 3, maxEach = 10, gapH = 12 } = 
         const thr = Math.max(.2, sims.length ? sims[Math.floor(sims.length / 4)] : 1);
         for (const [id, v] of vec) if (!set.has(id) && AI.dot(v, tv) >= thr) set.add(id);
       }
-      if (set.size >= min) cands.push({ id: 'smart:tag:' + t, tag: t, kind: KIND[group.get(t)] || 'theme', name: title(t), ids: [...set] });
+      if (set.size >= min) cands.push({ id: 'smart:tag:' + t, tag: t, kind: KIND[group.get(t)] || 'theme', name: albumTitle(t), ids: [...set] });
     }
     cands.sort((a, b) => b.ids.length - a.ids.length);
     const kept = [];
