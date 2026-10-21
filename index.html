@@ -114,6 +114,16 @@
   <div class="lb-tags" id="lbTags"></div>
 </div>
 
+<div class="overlay" id="reel" role="dialog" aria-label="Highlight reel">
+  <div class="rl-stage" id="rlStage"><video id="rvA" playsinline webkit-playsinline muted preload="auto"></video><video id="rvB" playsinline webkit-playsinline muted preload="auto"></video><img id="rlImg" alt=""></div>
+  <div class="rl-shade"></div>
+  <div class="rl-bars" id="rlBars"></div>
+  <div class="rl-top"><button class="iconbtn" id="rlClose" aria-label="Close reel"><span data-ic="close"></span></button><div class="rl-title"><b id="rlTitle">Highlights</b><small id="rlSub"></small></div><span class="sp"></span>
+    <button class="iconbtn" id="rlSound" aria-label="Sound"><span data-ic="mute"></span></button><button class="btn btn-primary btn-sm" id="rlSave"><span data-ic="download"></span><span>Save reel</span></button></div>
+  <button class="rl-tap rl-prev" id="rlPrev" aria-label="Previous clip"></button><button class="rl-tap rl-next" id="rlNext" aria-label="Next clip"></button>
+  <button class="bigplay rl-play" id="rlPlay" aria-label="Play/Pause"><span data-ic="pause"></span></button>
+  <div class="rl-msg" id="rlMsg"></div>
+</div>
 <div class="overlay" id="player" role="dialog" aria-label="Video player">
   <video id="vid" playsinline webkit-playsinline preload="auto"></video>
   <div class="pl-vig"></div>
@@ -126,7 +136,7 @@
   </div>
   <div class="pl-msg" id="plMsg"></div>
   <div class="pl-ui pl-bottom">
-    <div class="prog" id="prog"><div class="track"><div class="buf" id="buf"></div><div class="fill" id="fill"></div></div><div class="knob" id="knob"></div><div class="tip" id="tip">0:00</div></div>
+    <div class="prog" id="prog"><div class="track"><div class="buf" id="buf"></div><div class="fill" id="fill"></div></div><div class="knob" id="knob"></div><div class="tip" id="tip">0:00</div><div class="chmarks" id="chMarks"></div></div>
     <div class="ctrls">
       <span class="time" id="time">0:00 / 0:00</span>
       <button class="cbtn" id="cPlay" aria-label="Play/Pause"><span data-ic="play"></span></button>
@@ -134,9 +144,10 @@
       <button class="cbtn" id="cFwd" aria-label="Forward 10s"><span data-ic="fwd"></span><b>10</b></button>
       <button class="cbtn" id="cSpeed" aria-label="Playback speed">1x</button>
       <button class="cbtn" id="cMute" aria-label="Mute"><span data-ic="vol"></span></button>
-      <button class="cbtn" id="cFav" aria-label="Favorite"><span data-ic="heart"></span></button>
+      <button class="cbtn" id="cChap" aria-label="Chapters" title="Chapters"><span data-ic="chap"></span><i class="cbadge" id="chBadge"></i></button><button class="cbtn" id="cReel" aria-label="Highlights" title="Highlight reel"><span data-ic="reel"></span></button><button class="cbtn" id="cFav" aria-label="Favorite"><span data-ic="heart"></span></button>
       <button class="cbtn" id="cFull" aria-label="Fullscreen"><span data-ic="full"></span></button>
     </div>
+    <div class="chstrip" id="chStrip"></div>
     <div class="rel-h">Related videos</div>
     <div class="rel" id="rel"></div>
   </div>

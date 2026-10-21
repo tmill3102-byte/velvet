@@ -3,6 +3,7 @@ import * as Thumbs from './thumbs.js';
 import * as AI from './ai.js';
 import * as Vision from './vision.js';
 import * as Smart from './smart.js';
+import * as Scenes from './scenes.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -35,6 +36,8 @@ const IC = {
   exitfull: S('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>'),
   photo: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8 8"/>'),
   film: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5z"/>'),
+  chap: S('<path d="M4 6.5h3M4 12h3M4 17.5h3"/><rect x="9.5" y="4.5" width="10.5" height="4" rx="1.2"/><rect x="9.5" y="10" width="10.5" height="4" rx="1.2"/><rect x="9.5" y="15.5" width="10.5" height="4" rx="1.2"/>'),
+  reel: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9h17M3.5 15h17M8 5v4M16 5v4M8 15v4M16 15v4"/><path d="M11 10.6v2.8l2.4-1.4z" fill="currentColor"/>'),
   disk: S('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
   bolt: S('<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>'),
   spark: S('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>'),
@@ -201,7 +204,7 @@ function afterUnlock(first) {
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
-function lockNow() { if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
+function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
   AI.shutdown(); aiProg = null; drawAIChip();
@@ -375,9 +378,9 @@ function renderCollection() {
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(c.id));
   h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
     <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${colItems(c).length} items · Private</p></div>
-    <div class="hero-actions"><button class="btn btn-primary btn-sm" id="colImport">${IC.plus}<span>Import</span></button><button class="iconbtn" id="colMore" aria-label="Options">${IC.more}</button></div>`;
+    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="colImport">${IC.plus}<span>Import</span></button><button class="iconbtn" id="colMore" aria-label="Options">${IC.more}</button></div>`;
   hydrateCovers(h);
-  $('#colImport').onclick = () => pickFiles(c.id); $('#colMore').onclick = () => collectionMenu(c);
+  $('#colImport').onclick = () => pickFiles(c.id); $('#colReel').onclick = () => openReel(colItems(c), c.name); $('#colMore').onclick = () => collectionMenu(c);
   renderGrid($('#colItems'), sortNew(colItems(c)), `<div class="empty"><b>This collection is empty</b>Import straight into it, or use <i>Select</i> in your Library and choose “Add to collection”.</div>`);
 }
 
@@ -478,6 +481,7 @@ async function renderProfile() {
     <div class="card rows">
       <div class="row"><div class="meta">Auto-lock<small>Lock after inactivity</small></div><select id="alMin">${[1, 2, 5, 10, 30].map(m => `<option value="${m}" ${s.autolockMin == m ? 'selected' : ''}>${m} min</option>`).join('')}</select><button class="switch" role="switch" data-key="autolock" aria-checked="${s.autolock}" aria-label="Auto-lock"></button></div>
       <div class="row"><div class="meta">Lock when hidden<small>Lock as soon as you switch apps or minimise</small></div><button class="switch" role="switch" data-key="lockOnHide" aria-checked="${s.lockOnHide}" aria-label="Lock when hidden"></button></div>
+      <div class="row"><div class="meta">Video chapters<small>Find scenes automatically when you open a video (on this device)</small></div><button class="switch" role="switch" data-key="autoChapters" aria-checked="${s.autoChapters !== false}" aria-label="Video chapters"></button></div>
       <div class="row"><div class="meta">Hide from recents<small>Blur Velvet when it loses focus</small></div><button class="switch" role="switch" data-key="hide" aria-checked="${s.hide}" aria-label="Hide from recents"></button></div>
       <div class="row"><div class="meta">Vault PIN<small>${s.vaultPin ? 'On: vault asks for a second PIN' : 'Off: vault opens with your passcode session'}</small></div><button class="btn btn-ghost btn-sm" id="vpinBtn">${s.vaultPin ? 'Change / remove' : 'Set PIN'}</button></div>
       <div class="row"><div class="meta">Passcode<small>Re-wraps your key; files aren’t re-encrypted</small></div><button class="btn btn-ghost btn-sm" id="chPass">Change</button></div>
@@ -497,7 +501,7 @@ async function renderProfile() {
   hydrateIcons($('#profileBody'));
   const ring = $('#ring'), RC = 2 * Math.PI * 86; ring.style.strokeDasharray = RC; ring.style.strokeDashoffset = RC;
   requestAnimationFrame(() => requestAnimationFrame(() => { ring.style.strokeDashoffset = RC * (1 - Math.max(frac, libBytes ? 0.02 : 0)); }));
-  $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off' }[k]); });
+  $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if (k === 'autoChapters' && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
   bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
@@ -742,7 +746,7 @@ async function deleteItems(ids) {
   if (!(await confirmBox(`Delete ${n === 1 ? 'this item' : n + ' items'}?`, 'They’ll be permanently removed from Velvet on this device. Originals elsewhere aren’t affected.', 'Delete', true))) return false;
   for (const id of ids) {
     const it = itemById(id); if (!it) continue;
-    await Store.deleteFile(id); if (it.thumb) await Store.deleteFile(it.thumb.id);
+    await Store.deleteFile(id); if (it.thumb) await Store.deleteFile(it.thumb.id); if (it.chap && it.chap.file) await Store.deleteFile(it.chap.file.id).catch(() => { });
     if (thumbs.has(id)) { URL.revokeObjectURL(thumbs.get(id)); thumbs.delete(id); } if (fulls.has(id)) { URL.revokeObjectURL(fulls.get(id)); fulls.delete(id); }
     idx.items = idx.items.filter(x => x.id !== id); idx.collections.forEach(c => { if (c.cover === id) c.cover = null; });
   }
@@ -808,7 +812,7 @@ function togglePick(id, tile) { sel.has(id) ? sel.delete(id) : sel.add(id); tile
 function drawSelbar() {
   const b = $('#selbar'), n = sel.size, ids = [...sel];
   b.innerHTML = `<span class="count">${n} selected</span><button data-s="all">${IC.check}All</button>
-    <button data-s="fav">${IC.heart}Favorite</button><button data-s="col">${IC.cols}Add to collection</button>
+    <button data-s="fav">${IC.heart}Favorite</button><button data-s="reel">${IC.reel}Highlights</button><button data-s="col">${IC.cols}Add to collection</button>
     ${view === 'collection' && !isSmart(curCol) ? `<button data-s="uncol">${IC.minus}Remove from collection</button>` : ''}
     ${view === 'vault' ? `<button data-s="unvault">${IC.vault}Back to Library</button>` : `<button data-s="vault">${IC.vault}Move to Vault</button>`}
     <button data-s="del" class="danger">${IC.trash}Delete</button><button data-s="x">${IC.close}</button>`;
@@ -820,6 +824,7 @@ function drawSelbar() {
     if (!n) return toast('Tap items to select them first');
     if (s === 'fav') { const on = !ids.every(id => itemById(id).fav); ids.forEach(id => itemById(id).fav = on); await save(); endSelect(); render(); toast(on ? 'Added to Favorites' : 'Removed from Favorites'); }
     else if (s === 'col') { if (await addToCollections(ids)) endSelect(); }
+    else if (s === 'reel') { const its = ids.map(itemById).filter(Boolean); endSelect(); openReel(its, its.length === 1 ? its[0].title : `${its.length} picks`); }
     else if (s === 'uncol') { ids.forEach(id => { const it = itemById(id); it.cols = it.cols.filter(c => c !== curCol); }); await save(); endSelect(); render(); toast('Removed from collection'); }
     else if (s === 'vault' || s === 'unvault') { endSelect(); setVault(ids, s === 'vault'); }
     else if (s === 'del') { if (await deleteItems(ids)) endSelect(); }
@@ -863,10 +868,10 @@ async function openPlayer(it, list) {
   try {
     const u = await getFull(it, p => { if (tok === plTok) flash('Decrypting ' + Math.round(p * 100) + '%', true); });
     if (tok !== plTok) return; $('#plMsg').classList.remove('show');
-    vid.src = u; vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
+    vid.src = u; playerChapters(it, u, tok); vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
   } catch (e) { if (tok === plTok) { pl.classList.remove('loading'); flash('Can’t open this video: ' + e.message); } }
 }
-function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; vid.pause(); vid.removeAttribute('src'); vid.load(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
+function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; clearChapters(); vid.pause(); vid.removeAttribute('src'); vid.load(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
 function renderRelated() {
   const vids = plList.length > 1 ? plList : (curVid && curVid.vault ? idx.items.filter(i => i.vault && i.type === 'video') : visible().filter(i => i.type === 'video'));
   $('#rel').innerHTML = vids.slice(0, 30).map(v => `<div class="rel-item ${v === curVid ? 'cur' : ''}" data-id="${v.id}" style="--fb:${fbFor(v.id)}"><img alt="" data-tid="${v.id}"><div class="shade"></div><span class="t">${esc(v.title)}</span><span class="dur">${fmt(v.dur)}</span></div>`).join('');
@@ -906,7 +911,7 @@ function updProg() {
 }
 const prog = $('#prog');
 const posAt = x => { const r = prog.getBoundingClientRect(); return Math.max(0, Math.min(1, (x - r.left) / r.width)); };
-function showTip(f) { const d = vid.duration || (curVid && curVid.dur) || 0; $('#tip').style.left = (f * 100) + '%'; $('#tip').textContent = fmt(f * d); }
+function showTip(f) { const d = vid.duration || (curVid && curVid.dur) || 0; $('#tip').style.left = (f * 100) + '%'; const k = chapAt(f * d); $('#tip').textContent = fmt(f * d) + (chap.list && chap.list.length > 1 && k >= 0 ? ' · ' + chap.list[k].label : ''); }
 function seekTo(f) { $('#fill').style.width = f * 100 + '%'; $('#knob').style.left = f * 100 + '%'; if (isFinite(vid.duration)) vid.currentTime = f * vid.duration; }
 prog.addEventListener('pointermove', e => { const f = posAt(e.clientX); showTip(f); if (dragging) seekTo(f); });
 prog.addEventListener('pointerdown', e => { dragging = true; prog.classList.add('drag'); try { prog.setPointerCapture(e.pointerId); } catch (_) { } const f = posAt(e.clientX); showTip(f); seekTo(f); wake(); });
@@ -914,6 +919,226 @@ const endDrag = () => { if (!dragging) return; dragging = false; prog.classList.
 prog.addEventListener('pointerup', endDrag); prog.addEventListener('pointercancel', endDrag);
 function wake() { pl.classList.remove('idle'); clearTimeout(hideT); hideT = setTimeout(() => { if (!vid.paused && !dragging && pl.classList.contains('open')) pl.classList.add('idle'); }, 2500); }
 ['pointermove', 'pointerdown', 'touchstart'].forEach(ev => pl.addEventListener(ev, wake, { passive: true }));
+
+/* ---------- video chapters (v1.3): on-device scene detection, encrypted per-video sidecar ---------- */
+const b64of = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(blob); });
+const blobOf = (b64, type) => { const s = atob(b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Blob([u], { type }); };
+const capLabel = t => t.replace(/^\w/, c => c.toUpperCase());
+let chap = { id: null, list: null, busy: false, urls: [] };
+function clearChapters() { chap.urls.forEach(u => URL.revokeObjectURL(u)); chap = { id: null, list: null, busy: false, urls: [] }; $('#chMarks').innerHTML = ''; $('#chStrip').innerHTML = ''; $('#chBadge').textContent = ''; pl.classList.remove('chap-open'); }
+async function loadChapters(it) {
+  if (!it.chap || !it.chap.file) return null;
+  try { const j = JSON.parse(await (await Store.readFile(it.chap.file.id, it.chap.file.chunks, 'application/json')).text());
+    return j.list.map(c => { const u = c.img ? URL.createObjectURL(blobOf(c.img, 'image/jpeg')) : ''; if (u) chap.urls.push(u); return { t: c.t, label: c.label, url: u }; });
+  } catch (e) { console.warn('chapters unreadable', e); return null; }
+}
+function chapAt(t) { const L = chap.list; if (!L) return -1; let k = -1; for (let i = 0; i < L.length; i++) if (L[i].t <= t + .05) k = i; return k; }
+function drawChapters() {
+  const L = chap.list, d = vid.duration || (curVid && curVid.dur) || 0, strip = $('#chStrip');
+  $('#chBadge').textContent = L && L.length > 1 ? L.length : '';
+  $('#chMarks').innerHTML = L && d ? L.slice(1).map(c => `<button class="chm" style="left:${(c.t / d * 100).toFixed(3)}%" data-t="${c.t}" aria-label="Chapter: ${esc(c.label)} at ${fmt(c.t)}"><span class="chpop">${c.url ? `<img alt="" src="${c.url}">` : ''}<b>${esc(c.label)}</b><i>${fmt(c.t)}</i></span></button>`).join('') : '';
+  const head = `<div class="chhead">${IC.chap}<b>Chapters</b><span>${chap.busy ? 'Finding scenes on this device…' : L ? (L.length > 1 ? `${L.length} scenes · tap to jump` : 'No scene changes found') : ''}</span><span class="sp"></span>${!chap.busy && curVid ? `<button class="btn btn-ghost btn-sm" id="chRedo">${L ? 'Re-detect' : 'Find chapters'}</button>` : ''}</div>`;
+  strip.innerHTML = head + (chap.busy && !L ? `<div class="chbusy"><div class="lb-loading"></div></div>` : '') + (L && L.length ? `<div class="chrow">${L.map((c, k) => `<button class="chcard" data-t="${c.t}" data-k="${k}"><span class="chimg">${c.url ? `<img alt="" src="${c.url}">` : ''}<i>${fmt(c.t)}</i></span><b>${esc(c.label)}</b></button>`).join('')}</div>` : '');
+  hiChapter(); const r = $('#chRedo'); if (r) r.onclick = e => { e.stopPropagation(); if (curVid && vid.src) detectChapters(curVid, vid.src, true); };
+}
+function hiChapter() { const k = chapAt(vid.currentTime || 0); $$('#chStrip .chcard').forEach(c => c.classList.toggle('on', +c.dataset.k === k)); }
+const jumpTo = t => { if (!isFinite(vid.duration)) return; vid.currentTime = Math.min(vid.duration - .05, +t); const p = vid.play(); if (p && p.catch) p.catch(() => { }); updProg(); wake(); };
+$('#chMarks').addEventListener('pointerdown', e => { if (e.target.closest('.chm')) e.stopPropagation(); });
+$('#chMarks').addEventListener('click', e => { const m = e.target.closest('.chm'); if (!m) return; e.stopPropagation(); jumpTo(m.dataset.t); const k = chapAt(+m.dataset.t); if (chap.list && chap.list[k]) flash(chap.list[k].label); });
+$('#chStrip').addEventListener('click', e => { const c = e.target.closest('.chcard'); if (c) { jumpTo(c.dataset.t); flash(c.querySelector('b').textContent); } });
+$('#cReel').onclick = () => { if (curVid) openReel([curVid], curVid.title); };
+$('#cChap').onclick = () => { pl.classList.toggle('chap-open'); if (pl.classList.contains('chap-open') && curVid && !chap.list && !chap.busy && vid.src) detectChapters(curVid, vid.src, true); drawChapters(); wake(); };
+vid.addEventListener('timeupdate', hiChapter);
+async function detectChapters(it, url, force) {
+  if (chap.busy || (!force && it.chap)) return; const tok = plTok; chap.busy = true; drawChapters();
+  try {
+    const scan = await Scenes.scanVideo(url, { shouldStop: () => tok !== plTok || !Store.isUnlocked() });
+    if (tok !== plTok || !Store.isUnlocked() || !scan.frames.length) return;
+    const ch = Scenes.chaptersFrom(scan, Scenes.findCuts(scan));
+    let labels = [];
+    if (aiOn()) { try { await AI.open(idx); labels = await AI.labelFrames(ch.map(c => c.frame.blob)); } catch (e) { console.warn('chapter labels', e); } }
+    if (tok !== plTok) return;
+    const list = [];
+    ch.forEach((c, k) => { const L = labels[k] || {}, prev = list[list.length - 1];
+      if (prev && L.vec && prev.vec && AI.dot(L.vec, prev.vec) >= .93) return;          // AI sees the same scene: merge
+      list.push({ t: c.t, label: L.label ? capLabel(L.label) : null, blob: c.frame.blob, vec: L.vec }); });
+    list.forEach((c, k) => { if (!c.label) c.label = 'Scene ' + (k + 1); });
+    const seen = {}; list.forEach(c => { const n = (seen[c.label] = (seen[c.label] || 0) + 1); if (n > 1) c.label += ' ' + n; });
+    const json = { v: 1, dur: scan.dur, list: await Promise.all(list.map(async c => ({ t: c.t, label: c.label, img: await b64of(c.blob) }))) };
+    const old = it.chap && it.chap.file, fid = it.id + (old && old.id.endsWith('_chA') ? '_chB' : '_chA');
+    const r = await Store.putFile(fid, new Blob([JSON.stringify(json)], { type: 'application/json' }));
+    it.chap = { v: 1, n: list.length, labels: list.map(c => c.label), at: Date.now(), ai: !!labels.length, partial: !!scan.partial, ms: Math.round(scan.ms || 0), file: { id: fid, chunks: r.chunks, stored: r.stored } };
+    await save(); if (old && old.id !== fid) Store.deleteFile(old.id).catch(() => { });
+    if (tok === plTok && curVid === it) { chap.urls.forEach(u => URL.revokeObjectURL(u)); chap.urls = []; chap.list = await loadChapters(it); chap.id = it.id; }
+  } catch (e) { console.warn('chapters', e); }
+  finally { chap.busy = false; if (tok === plTok) drawChapters(); }
+}
+function playerChapters(it, url, tok) {
+  clearChapters(); chap.id = it.id; drawChapters();
+  if (it.chap) loadChapters(it).then(l => { if (tok === plTok) { chap.list = l; drawChapters(); } });
+  else if (idx.settings.autoChapters !== false && !(isIOS && (it.dur || 0) > 1200)) setTimeout(() => { if (tok === plTok && Store.isUnlocked()) detectChapters(it, url); }, 1500);
+}
+vid.addEventListener('loadedmetadata', () => { if (!isFinite(vid.duration)) { const t = vid.currentTime; vid.currentTime = 1e7; vid.addEventListener('durationchange', () => { vid.currentTime = t; drawChapters(); }, { once: true }); } else drawChapters(); });
+
+/* ---------- highlight reels (v1.3): best segments, seamless double-buffered playback, optional export ---------- */
+const rl = $('#reel'), rvs = [$('#rvA'), $('#rvB')], rlImg = $('#rlImg');
+const PHOTO_S = 2.6;
+let R = null;   // { title, segs:[{kind,id,url,start,end,dur,label,el}], i, playing, urls:[], tok, rec, thumb, src:[ids], startedAt }
+async function buildReel(items, title) {
+  const urls = [], segs = [];
+  const vids = items.filter(i => i.type === 'video').slice(0, 10), pics = items.filter(i => i.type === 'photo');
+  const single = items.length === 1 && vids.length === 1;
+  const cap = isIOS ? 500 * 1024 ** 2 : 3 * 1024 ** 3; let used = 0, skipped = 0, best = null;
+  try {
+    for (let k = 0; k < vids.length; k++) {
+      const v = vids[k]; if (used + v.size > cap) { skipped++; continue; } used += v.size;
+      progress(`Finding highlights · ${v.title}`, k / Math.max(1, vids.length + (pics.length ? 1 : 0)));
+      const type = v.mime === 'video/quicktime' && !isIOS ? 'video/mp4' : v.mime;
+      const blob = await Store.readFile(v.id, v.chunks, type); if (!Store.isUnlocked()) throw new Error('locked');
+      const url = URL.createObjectURL(blob); urls.push(url);
+      const scan = await Scenes.scanVideo(url, single ? {} : { maxN: 40, budget: isIOS ? 9000 : 12000 });
+      const picks = Scenes.pickSegments(scan, single ? { target: 20, max: 8 } : { target: Math.max(3, 30 / vids.length), max: Math.max(1, Math.round(12 / vids.length)) });
+      picks.forEach(p => segs.push({ kind: 'video', id: v.id, url, start: p.start, end: p.end, score: p.score, w: scan.w, h: scan.h, when: (Smart.timeOf(v) || v.added) + p.start * 1000 }));
+      for (const f of scan.frames) if (!f.blank && (!best || f.score > best.score)) best = f;
+    }
+    if (pics.length) {
+      const top = pics.slice().sort((a, b) => AI.quality(b) - AI.quality(a)).slice(0, vids.length ? 6 : 12);
+      for (const p of top) {
+        let b = await Store.readFile(p.id, p.chunks, p.mime); if (!Store.isUnlocked()) throw new Error('locked');
+        if (Thumbs.isHeic(p.mime, p.name)) b = await Thumbs.displayableImage(b, p.mime, p.name);
+        const own = URL.createObjectURL(b); urls.push(own); segs.push({ kind: 'photo', id: p.id, url: own, start: 0, end: PHOTO_S, w: p.w, h: p.h, when: Smart.timeOf(p) || p.added }); }
+    }
+  } catch (e) { progress(null); urls.forEach(u => URL.revokeObjectURL(u)); if (e.message !== 'locked') toast('Couldn’t build the reel: ' + e.message, 4000); return null; }
+  progress(null);
+  if (!single) segs.sort((a, b) => a.when - b.when);
+  if (!segs.length) { urls.forEach(u => URL.revokeObjectURL(u)); toast(vids.length ? 'No highlight-worthy moments found (videos may be too dark or blurry, or can’t be decoded here)' : 'Nothing to make a reel from'); return null; }
+  if (skipped) toast(`Skipped ${skipped} large video${skipped === 1 ? '' : 's'} to stay within memory`, 4000);
+  let vi = 0; segs.forEach(s => { s.dur = s.end - s.start; if (s.kind === 'video') s.el = vi++ % 2; const it = itemById(s.id); s.label = it ? it.title : ''; });
+  return { title, segs, urls, thumb: best && best.blob, src: items.map(i => i.id), vault: items.some(i => i.vault), col: (view === 'collection' && !isSmart(curCol)) ? curCol : null };
+}
+async function openReel(items, title) {
+  if (R) closeReel();
+  const r = await buildReel(items, title); if (!r) return;
+  if (curVid) vid.pause();
+  R = { ...r, i: 0, playing: true, tok: Math.random() };
+  $('#rlTitle').textContent = title; $('#rlBars').innerHTML = R.segs.map((s, k) => `<i style="flex:${s.dur.toFixed(2)}"><b id="rlb${k}"></b></i>`).join('');
+  rvs.forEach(v => { v.muted = !reelSound; v.removeAttribute('src'); delete v.dataset.src; });
+  rl.classList.add('open'); rl.classList.remove('paused', 'ended'); setIcon($('#rlPlay'), 'pause'); setIcon($('#rlSound'), reelSound ? 'vol' : 'mute');
+  $('#rlSave').classList.toggle('unsupported', !Scenes.recorderType());
+  await reelShow(0); reelLoop();
+  const rr = R; if (rr) rr.iv = setInterval(() => { if (R !== rr) return clearInterval(rr.iv); if (performance.now() - (rr.lastTick || 0) > 120) reelTick(); }, 150);
+}
+let reelSound = false;
+function reelPrep(s) {
+  if (!s || s.kind !== 'video') return Promise.resolve(); const el = rvs[s.el];
+  if (el.dataset.src !== s.url || el.error) { el.src = s.url; el.dataset.src = s.url; el.load(); }
+  const go = () => { el.currentTime = s.start; return Thumbs.once(el, 'seeked', 3000).catch(() => { if (el.error) delete el.dataset.src; }); };
+  return el.readyState >= 1 ? go() : Thumbs.once(el, 'loadedmetadata', 6000).then(go, () => { });
+}
+async function reelShow(i) {
+  if (!R) return; const tk = R.tok; if (i >= R.segs.length) return reelEnd();
+  R.i = i; const s = R.segs[i];
+  R.segs.forEach((x, k) => { const b = $('#rlb' + k); if (b) b.style.width = k < i ? '100%' : '0%'; });
+  $('#rlSub').textContent = `${s.label}${s.kind === 'video' ? ' · ' + fmt(s.start) : ''} · ${i + 1}/${R.segs.length}`;
+  if (s.kind === 'photo') {
+    rlImg.classList.remove('on', 'kb'); void rlImg.offsetWidth; rlImg.src = s.url; rlImg.classList.add('on', 'kb'); rlImg.style.animationDuration = (PHOTO_S + .4) + 's';
+    rvs.forEach(v => { v.classList.remove('on'); v.pause(); }); R.t0 = performance.now(); R.pausedAt = null;
+  } else {
+    const el = rvs[s.el], other = rvs[1 - s.el];
+    if (el.dataset.src !== s.url || Math.abs(el.currentTime - s.start) > .35) await reelPrep(s);
+    if (!R || R.tok !== tk) return;
+    el.classList.add('on'); other.classList.remove('on'); other.pause(); rlImg.classList.remove('on');
+    if (R.playing) { el.muted = !reelSound || !!R.rec; const p = el.play(); if (p && p.catch) p.catch(() => { el.muted = true; el.play().catch(() => { }); }); }
+  }
+  const n = R.segs.slice(i + 1).find(x => x.kind === 'video'); if (n && (s.kind !== 'video' || n.el !== s.el)) reelPrep(n);
+}
+// driven by rAF for smooth bars, plus a timer watchdog: some WebKit builds (and iOS Low Power Mode) throttle rAF hard
+function reelLoop() { if (!R) return; reelTick(); R && (R.raf = requestAnimationFrame(reelLoop)); }
+function reelTick() {
+  if (!R) return; R.lastTick = performance.now(); const s = R.segs[R.i];
+  if (s && R.playing) {
+    let f = 0;
+    if (s.kind === 'photo') f = (performance.now() - R.t0) / (PHOTO_S * 1000);
+    else { const el = rvs[s.el]; f = (el.currentTime - s.start) / s.dur; if (el.ended) f = 1;
+      const now = performance.now(); if (R.lastI !== R.i || Math.abs(el.currentTime - R.lastT) > .01) { R.lastI = R.i; R.lastT = el.currentTime; R.lastMove = now; }
+      else if (now - R.lastMove > 4000 || el.error) { R.lastMove = now; f = 1; } }        // a clip that won't play: skip it rather than stall the reel
+    const b = $('#rlb' + R.i); if (b) b.style.width = Math.max(0, Math.min(100, f * 100)) + '%';
+    if (f >= .995 && !R.adv) { R.adv = true; reelShow(R.i + 1).finally(() => { if (R) R.adv = false; }); }
+  }
+  if (R && R.rec) reelDraw();
+}
+function reelSetPlaying(on) {
+  if (!R) return; R.playing = on; const s = R.segs[R.i]; setIcon($('#rlPlay'), on ? 'pause' : 'play'); rl.classList.toggle('paused', !on);
+  if (s && s.kind === 'video') { const el = rvs[s.el]; if (on) el.play().catch(() => { }); else el.pause(); }
+  else if (s) { if (on) { R.t0 = performance.now() - (R.pausedAt || 0); R.pausedAt = null; } else R.pausedAt = performance.now() - R.t0; }
+  rlImg.style.animationPlayState = on ? 'running' : 'paused';
+}
+function reelEnd() {
+  if (!R) return;
+  if (R.rec) { R.rec.stop(); return; }
+  R.playing = false; setIcon($('#rlPlay'), 'play'); rl.classList.add('paused', 'ended'); rvs.forEach(v => v.pause());
+  $('#rlSub').textContent = 'End of reel · tap play to watch again';
+}
+function closeReel() {
+  if (!R) return; const r = R; R = null; cancelAnimationFrame(r.raf); clearInterval(r.iv);
+  if (r.rec) { try { r.rec.stop(); } catch (e) { } }
+  rvs.forEach(v => { v.pause(); v.removeAttribute('src'); delete v.dataset.src; v.load(); v.classList.remove('on'); }); rlImg.removeAttribute('src'); rlImg.classList.remove('on', 'kb');
+  r.urls.forEach(u => URL.revokeObjectURL(u)); rl.classList.remove('open', 'paused', 'ended', 'recording'); $('#rlMsg').classList.remove('show');
+}
+$('#rlClose').onclick = closeReel;
+$('#rlPlay').onclick = () => { if (!R || R.rec) return; if (rl.classList.contains('ended')) { rl.classList.remove('ended'); R.playing = true; reelShow(0); reelSetPlaying(true); return; } reelSetPlaying(!R.playing); };
+$('#rlPrev').onclick = () => { if (R && !R.rec) reelShow(Math.max(0, R.i - 1)); };
+$('#rlNext').onclick = () => { if (R && !R.rec) reelShow(R.i + 1); };
+$('#rlSound').onclick = () => { reelSound = !reelSound; setIcon($('#rlSound'), reelSound ? 'vol' : 'mute'); if (R && !R.rec) rvs.forEach(v => { v.muted = !reelSound; }); };
+rl.addEventListener('keydown', e => { if (e.key === 'Escape') closeReel(); });
+document.addEventListener('keydown', e => { if (!R || document.querySelector('.modal')) return; if (e.key === 'Escape') { e.stopImmediatePropagation(); closeReel(); } else if (e.key === ' ') { e.preventDefault(); e.stopImmediatePropagation(); $('#rlPlay').click(); } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); e.stopImmediatePropagation(); $(e.key === 'ArrowRight' ? '#rlNext' : '#rlPrev').click(); } }, true);
+
+/* export: draw the reel into a canvas and record it with MediaRecorder (silent), then save it encrypted like any import */
+function reelDraw() {
+  const { cv, cx } = R.rec; const s = R.segs[R.i]; if (!s) return;
+  const src = s.kind === 'photo' ? rlImg : rvs[s.el]; const sw = src.videoWidth || src.naturalWidth, sh = src.videoHeight || src.naturalHeight;
+  cx.fillStyle = '#000'; cx.fillRect(0, 0, cv.width, cv.height); if (!sw || !sh) return;
+  let k = Math.min(cv.width / sw, cv.height / sh);
+  if (s.kind === 'photo') k *= 1 + .06 * Math.min(1, (performance.now() - R.t0) / (PHOTO_S * 1000));    // gentle zoom, like the on-screen reel
+  const w = sw * k, h = sh * k; try { cx.drawImage(src, (cv.width - w) / 2, (cv.height - h) / 2, w, h); } catch (e) { }
+}
+$('#rlSave').onclick = async () => {
+  if (!R || R.rec) return; const type = Scenes.recorderType();
+  if (!type) { await modal(`<h3>Saving reels isn’t supported here</h3><p>${isIOS ? 'This version of iOS Safari can’t record video from the page.' : 'This browser can’t record video from the page (it needs MediaRecorder with canvas capture).'} You can still watch the reel any time. It’s rebuilt on this device in a few seconds. On Windows, the Velvet app can save reels.</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+  const total = R.segs.reduce((a, s) => a + s.dur, 0), mp4 = type.includes('mp4');
+  if (!(await confirmBox('Save reel to your library?', `Velvet plays the reel once (${Math.round(total)} s) and records it on this device as a silent ${mp4 ? 'MP4' : 'WebM'} video. It’s encrypted and added to your ${R.vault ? 'Vault' : 'Library'}. Keep Velvet open while it records.`, 'Record & save'))) return;
+  const land = R.segs.filter(s => (s.w || 16) >= (s.h || 9)).length >= R.segs.length / 2, big = isIOS ? 960 : 1280, small = Math.round(big * 9 / 16 / 2) * 2;
+  const cv = document.createElement('canvas'); cv.width = land ? big : small; cv.height = land ? small : big;
+  const cx = cv.getContext('2d'); const stream = cv.captureStream(30);
+  let rec; try { rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: isIOS ? 2.5e6 : 5e6 }); } catch (e) { toast('Recording failed to start: ' + e.message, 4000); return; }
+  const chunks = []; rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const done = new Promise(res => { rec.onstop = res; });
+  R.rec = { rec, cv, cx }; R.rec.stop = () => rec.state !== 'inactive' && rec.stop();
+  rl.classList.add('recording'); rl.classList.remove('ended', 'paused'); rvs.forEach(v => { v.muted = true; });
+  const msg = $('#rlMsg'); msg.classList.add('show'); const t0 = performance.now();
+  const prog = setInterval(() => { if (R && R.rec) msg.textContent = `Recording reel… ${Math.min(99, Math.round((performance.now() - t0) / 10 / total))}%`; }, 300);
+  R.playing = true; setIcon($('#rlPlay'), 'pause'); await reelShow(0); reelDraw(); rec.start(500);
+  await done; clearInterval(prog);
+  if (!R) return;                                                   // closed while recording: discard
+  const r = R; r.rec = null; rl.classList.remove('recording'); msg.textContent = 'Encrypting & saving…';
+  const blob = new Blob(chunks, { type: type.split(';')[0] });
+  try {
+    const it = await saveReelItem(blob, r, total, cv.width, cv.height);
+    msg.classList.remove('show'); reelEnd(); toast(`Saved “${it.title}” to your ${it.vault ? 'Vault' : 'Library'}`, 3500);
+  } catch (e) { msg.classList.remove('show'); toast('Couldn’t save the reel: ' + e.message, 5000); reelEnd(); }
+};
+async function saveReelItem(blob, r, dur, w, h) {
+  if (!blob.size) throw new Error('nothing was recorded');
+  const id = uid(), mime = blob.type || 'video/webm', ext = /mp4/.test(mime) ? 'mp4' : 'webm';
+  const res = await Store.putFile(id, blob);
+  let th = null; try { th = await withTimeout(Thumbs.videoThumb(new File([blob], 'reel.' + ext, { type: mime }), mime), 20000); } catch (e) { }
+  const tb = (th && th.blob) || r.thumb; let thumb = null;
+  if (tb) { const tr = await Store.putFile(id + '_t', tb); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
+  const title = `${r.title} · Highlights`.slice(0, 80);
+  const it = { id, type: 'video', title, name: title + '.' + ext, ext, mime, size: blob.size, chunks: res.chunks, stored: res.stored, added: Date.now(), modified: Date.now(), taken: null,
+    tags: ['highlights'], fav: false, cols: r.col && colById(r.col) ? [r.col] : [], vault: r.vault, thumb, ar: w / h, dur, w, h, codec: /mp4/.test(mime) ? 'avc1' : 'vp8', thumbT: null, reel: { from: r.src.slice(0, 50), clips: r.segs.length } };
+  idx.items.push(it); await save(); render(); startAI(); return it;
+}
 
 /* ---------- smart albums, best shots, archive, smart rules (v1.2) ---------- */
 let smartCache = null;
@@ -947,8 +1172,9 @@ async function renderSmartCollection() {
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
   h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
     <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
-    <div class="hero-actions"><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
+    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
   hydrateCovers(h);
+  $('#smReel').onclick = () => openReel(items, a.name);
   $('#smSave').onclick = async () => {
     const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
     const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
@@ -1059,7 +1285,7 @@ async function addRuleDialog() {
 
 /* ---------- backup / restore ---------- */
 async function exportBackup() {
-  const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); });
+  const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); if (i.chap && i.chap.file) files.push({ id: i.chap.file.id, n: i.chap.file.chunks }); });
   const aif = idx.settings.ai && idx.settings.ai.file; if (aif) files.push({ id: aif.id, n: aif.chunks });
   const total = idx.items.reduce((a, i) => a + (i.stored || 0) + ((i.thumb && i.thumb.stored) || 0), 0);
   const name = `velvet-backup-${new Date().toISOString().slice(0, 10)}.velvet`;
@@ -1118,4 +1344,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
 })();
-window.Velvet = { nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

@@ -140,6 +140,23 @@ export async function search(q, ids) {
 }
 
 
+
+/* chapter labels (v1.3): embed a few frames on-device and name each with its best vocabulary tag */
+const LABEL_SKIP = new Set(['indoor', 'outdoor', 'screenshot', 'document', 'close-up', 'bokeh', 'vintage', 'aerial', 'silhouette', 'low light', 'smiling', 'man', 'woman', 'sky', 'clouds', 'travel']);
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+export async function labelFrames(blobs) {
+  await loadVocab(); const out = [];
+  try { await withTimeout(call({ type: 'init', text: false, vision: true }), 120000); } catch (e) { return blobs.map(() => ({ label: null, tags: [], vec: null })); }
+  for (const b of blobs) {
+    try {
+      const r = await withTimeout(call({ type: 'image', blob: b }), 30000), v = r.vec, q = quant(v);
+      const tags = zeroShot(meanVec([q]), { minSim: .14, minZ: 1.6, max: 8 }).filter(t => !LABEL_SKIP.has(t));
+      out.push({ label: tags[0] || null, tags: tags.slice(0, 3), vec: v });
+    } catch (e) { out.push({ label: null, tags: [], vec: null }); }
+  }
+  return out;
+}
+
 /* ---------- helpers for smart albums / best shots / rules (batch 2) ---------- */
 export const entryOf = id => (data && data.items[id]) || null;
 export function itemVec(id) { const l = vecs.get(id); return l && l.length ? meanVec(l) : null; }

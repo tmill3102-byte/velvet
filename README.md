@@ -12,3 +12,5 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 **On-device AI (v1.1, optional):** smart search ("sunset on the beach"), auto-tags and a duplicate finder, all running on your device with Apple MobileCLIP-S0 (≈93 MB, downloaded once from this site and cached for offline use). No photo, tag or query is ever uploaded. Turn it on in Profile → On-device AI. Licenses: `models/Xenova/mobileclip_s0/LICENSE`, `js/vendor/transformers/`.
 
 **New in v1.2:** smart albums (places, themes and moments from capture dates), a best-shot picker for bursts and look-alikes (keeps the best and archives the rest, with restore from Profile → Archive), and smart rules ("items tagged X / looking like Y → Vault or a collection"). All on-device and encrypted.
+
+**New in v1.3:** video chapters (on-device scene detection, chapter marks with thumbnails on the scrubber, tap to jump, AI chapter names) and highlight reels (the best moments of a video, collection or selection played as one seamless reel, with optional save as a new silent, encrypted video where the browser supports recording).
