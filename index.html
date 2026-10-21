@@ -53,6 +53,7 @@
 
     <section class="view" id="v-collections">
       <div class="section-title"><h2>Collections</h2><span id="colCount"></span></div>
+      <div id="peopleRow"></div>
       <div id="smartAlbums"></div>
       <div class="cols" id="colGrid"></div>
     </section>
@@ -67,6 +68,7 @@
       <div class="search-big">
         <div class="eyebrow" style="margin-bottom:12px">Search</div>
         <label class="searchbar"><span data-ic="search"></span><input id="q" placeholder="Search titles and tags…" autocomplete="off"><button class="sb-icon" id="qClear" aria-label="Clear"><span data-ic="close"></span></button></label>
+        <div id="searchPeople"></div>
         <div class="sub-h">Predictive suggestions</div>
         <div class="chips suggest" id="suggest"></div>
         <div class="sub-h">Tags</div>
@@ -92,6 +94,14 @@
     <section class="view" id="v-archive">
       <button class="btn btn-ghost btn-sm backp" data-nav="profile">&larr; Back to Profile</button>
       <div id="archBody"></div>
+    </section>
+    <section class="view" id="v-people">
+      <button class="btn btn-ghost btn-sm backp" data-nav="collections">&larr; Back to Collections</button>
+      <div id="peopleBody"></div>
+    </section>
+    <section class="view" id="v-person">
+      <button class="btn btn-ghost btn-sm backp" data-nav="people">&larr; All people</button>
+      <div id="personBody"></div>
     </section>
     <section class="view" id="v-rules">
       <button class="btn btn-ghost btn-sm backp" data-nav="profile">&larr; Back to Profile</button>

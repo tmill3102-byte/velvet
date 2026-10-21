@@ -1,0 +1,7 @@
+SFace face recognition model (face_recognition_sface_2021dec.onnx), from the OpenCV Zoo
+(https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface).
+Licensed under the Apache License, Version 2.0 (see LICENSE in this folder).
+
+Modified for Velvet: the ONNX graph's weight initializers were removed from the list of
+graph inputs (metadata only; the weights and the computation are unchanged) so the model
+loads in ONNX Runtime Web. File renamed to onnx/model.onnx.

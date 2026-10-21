@@ -16,9 +16,11 @@ function ensureWorker() {
 }
 // Free the model's memory (important on iPhone) when the AI has been idle for a while; it reloads on demand in ~1-2 s.
 const IDLE_MS = 45000; let idleT = null;
-function armIdle() { clearTimeout(idleT); idleT = setTimeout(() => { if (worker && !running && !pend.size) { worker.terminate(); worker = null; } }, IDLE_MS); }
+let extBusy = false; export function setBusy(b) { extBusy = !!b; if (!b) armIdle(); }   // People indexing keeps the worker warm
+function armIdle() { clearTimeout(idleT); idleT = setTimeout(() => { if (worker && !running && !extBusy && !pend.size) { worker.terminate(); worker = null; } }, IDLE_MS); }
 function call(msg, transfer) { const w = ensureWorker(); clearTimeout(idleT); return new Promise((res, rej) => { const id = ++seq; pend.set(id, { res: v => { res(v); armIdle(); }, rej: e => { rej(e); armIdle(); } }); w.postMessage({ ...msg, id }, transfer || []); }); }
 export const workerLoaded = () => !!worker;
+export const workerCall = (msg, transfer) => call(msg, transfer);
 export const deviceName = () => device;
 export function shutdown() { clearTimeout(idleT); if (worker) worker.terminate(); worker = null; for (const p of pend.values()) p.rej(new Error('stopped')); pend.clear(); data = null; vecs.clear(); textCache.clear(); running = false; }
 

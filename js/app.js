@@ -4,6 +4,7 @@ import * as AI from './ai.js';
 import * as Vision from './vision.js';
 import * as Smart from './smart.js';
 import * as Scenes from './scenes.js';
+import * as People from './people.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -37,6 +38,7 @@ const IC = {
   photo: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 16l-5-5-8 8"/>'),
   film: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M10 9.5v5l4.5-2.5z"/>'),
   chap: S('<path d="M4 6.5h3M4 12h3M4 17.5h3"/><rect x="9.5" y="4.5" width="10.5" height="4" rx="1.2"/><rect x="9.5" y="10" width="10.5" height="4" rx="1.2"/><rect x="9.5" y="15.5" width="10.5" height="4" rx="1.2"/>'),
+  people: S('<circle cx="9" cy="8.5" r="3.3"/><path d="M3 19.5c.9-3.3 3.2-5 6-5s5.1 1.7 6 5"/><circle cx="16.8" cy="7.5" r="2.6"/><path d="M16.5 12.6c2.3 0 4 1.4 4.6 4"/>'),
   reel: S('<rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M3.5 9h17M3.5 15h17M8 5v4M16 5v4M8 15v4M16 15v4"/><path d="M11 10.6v2.8l2.4-1.4z" fill="currentColor"/>'),
   disk: S('<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'),
   bolt: S('<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>'),
@@ -111,7 +113,7 @@ function nav(v, opt = {}) {
   if (!idx) return;
   if (view === 'vault' && v !== 'vault') vaultOpen = false;
   endSelect();
-  const tab = v === 'collection' ? 'collections' : v;
+  const tab = v === 'collection' || v === 'people' || v === 'person' ? 'collections' : v;
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'v-' + v));
   $$('.nav-btn[data-nav],.bn').forEach(b => b.classList.toggle('active', b.dataset.nav === tab));
   view = v; render();
@@ -132,6 +134,8 @@ function render() {
   else if (view === 'best') renderBest();
   else if (view === 'archive') renderArchive();
   else if (view === 'rules') renderRules();
+  else if (view === 'people') renderPeople();
+  else if (view === 'person') renderPerson();
 }
 document.addEventListener('click', e => {
   if (e.target.closest('.modal')) return;
@@ -202,16 +206,17 @@ function afterUnlock(first) {
   nav('library'); resetIdle(); if (host && host.setPrivacy) host.setPrivacy(idx.settings.hide);
   if (first) setTimeout(() => toast('Your gallery is ready. Import something to begin.'), 600);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  if (aiOn() && People.on(idx)) People.open(idx).then(() => { if (view === 'collections') renderPeopleRow('#peopleRow'); }).catch(e => console.warn('People open', e));
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
 function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
-  AI.shutdown(); aiProg = null; drawAIChip();
+  AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
   Store.lock(); idx = null; vaultOpen = false;
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
-  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#dupesBody'].forEach(s => { $(s).innerHTML = ''; });
+  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
   app.classList.add('locked'); app.setAttribute('aria-hidden', 'true'); lockEl.classList.add('open');
   gateUnlock();
 }
@@ -350,7 +355,7 @@ function renderCollections() {
      <div class="cmenu"><button class="iconbtn" data-cm="${c.id}" aria-label="Collection options">${IC.more}</button></div>
      <div class="info"><div><h3>${esc(c.name)}</h3><p>${colItems(c).length} items</p></div><span class="lockchip">${IC.lock}</span></div></div>`).join('') +
     `<button class="col-card col-new" id="newCol" style="--i:${idx.collections.length}">${IC.plus}New collection</button>`;
-  hydrateCovers($('#colGrid')); renderSmartAlbums();
+  hydrateCovers($('#colGrid')); renderSmartAlbums(); renderPeopleRow('#peopleRow');
   $('#newCol').onclick = () => newCollection();
   $$('[data-cm]').forEach(b => b.onclick = e => { e.stopPropagation(); collectionMenu(colById(b.dataset.cm)); });
 }
@@ -403,9 +408,13 @@ function renderSearch() {
     sug = tags.filter(t => t.includes(q)).slice(0, 3).map(t => ({ k: 'tag', v: t }))
       .concat(visible().filter(i => i.title.toLowerCase().includes(q)).slice(0, 4).map(i => ({ k: 'title', v: i.title })));
   } else sug = tags.slice(0, 4).map(t => ({ k: 'tag', v: t }));
-  $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}">${s.k === 'tag' ? IC.tag : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span style="color:var(--dim);font-size:13px;line-height:36px">No suggestions yet</span>';
+  const pOn = peopleOn() && People.isOpen(), names = new Map();
+  if (pOn) { People.people().forEach(p => { if (p.hidden || !p.name) return; People.itemsOf(p).forEach(id => names.set(id, (names.get(id) || '') + ' ' + p.name)); });
+    if (q) sug = People.find(q).filter(p => !p.hidden && People.itemsOf(p, visibleId).length).slice(0, 3).map(p => ({ k: 'person', v: p.name, id: p.id })).concat(sug); }
+  if (!pOn) $('#searchPeople').innerHTML = ''; else if (!q) renderPeopleRow('#searchPeople'); else $('#searchPeople').innerHTML = '';
+  $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span style="color:var(--dim);font-size:13px;line-height:36px">No suggestions yet</span>';
   const res = visible().filter(i => {
-    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + (i.aiTags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ')).toLowerCase();
+    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + (i.aiTags || []).join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase();
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
     for (const t of activeTags) {
       if (t === '__fav') { if (!i.fav) return false; } else if (t === '__photo') { if (i.type !== 'photo') return false; } else if (t === '__video') { if (i.type !== 'video') return false; }
@@ -434,7 +443,7 @@ function renderSearch() {
 let sT; $('#q').addEventListener('input', () => { clearTimeout(sT); sT = setTimeout(renderSearch, 80); });
 $('#qClear').addEventListener('click', e => { e.preventDefault(); $('#q').value = ''; activeTags.clear(); renderSearch(); });
 $('#tags').addEventListener('click', e => { const t = e.target.closest('.tag'); if (!t) return; const k = t.dataset.tag; activeTags.has(k) ? activeTags.delete(k) : activeTags.add(k); renderSearch(); });
-$('#suggest').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; if (c.dataset.k === 'tag') { activeTags.add(c.dataset.s); $('#q').value = ''; } else $('#q').value = c.dataset.s.toLowerCase(); renderSearch(); });
+$('#suggest').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; if (c.dataset.k === 'person') { openPerson(c.dataset.pid); return; } if (c.dataset.k === 'tag') { activeTags.add(c.dataset.s); $('#q').value = ''; } else $('#q').value = c.dataset.s.toLowerCase(); renderSearch(); });
 
 /* ---------- vault ---------- */
 function renderVault() {
@@ -610,9 +619,11 @@ const aiOn = () => !!(idx && idx.settings.ai && idx.settings.ai.on);
 let aiProg = null;
 function drawAIChip() {
   let el = $('#aiChip'); if (!el) { el = document.createElement('button'); el.id = 'aiChip'; el.className = 'ai-chip'; el.onclick = () => nav('profile'); document.body.appendChild(el); }
-  const p = aiProg; const show = p && (p.phase === 'indexing' || p.phase === 'loading' || p.phase === 'paused') && idx;
+  const act = p => p && (p.phase === 'indexing' || p.phase === 'loading' || p.phase === 'paused');
+  const face = !act(aiProg) && act(pplProg), p = face ? pplProg : aiProg, show = act(p) && idx;
   el.classList.toggle('show', !!show); if (!show) return;
-  el.innerHTML = `${IC.spark}<span>${p.phase === 'loading' ? 'Loading on-device AI…' : p.phase === 'paused' ? 'AI paused' : `AI indexing ${p.done}/${p.total}`}</span>`;
+  el.innerHTML = face ? `${IC.people}<span>${p.phase === 'loading' ? 'Loading face models…' : p.phase === 'paused' ? 'People paused' : `Finding faces ${p.done}/${p.total}`}</span>`
+    : `${IC.spark}<span>${p.phase === 'loading' ? 'Loading on-device AI…' : p.phase === 'paused' ? 'AI paused' : `AI indexing ${p.done}/${p.total}`}</span>`;
 }
 function aiStatusText() {
   if (!idx) return ''; const st = AI.stats(idx), p = aiProg;
@@ -632,6 +643,7 @@ async function startAI() {
   } catch (e) { console.warn('AI indexing', e); aiProg = { phase: 'error' }; drawAIChip(); toast('On-device AI couldn’t start: ' + (e.message || e)); }
   if (idx && Store.isUnlocked()) { smartCache = null; await applyRules().catch(e => console.warn('rules', e)); }
   if (idx && (view === 'search' || view === 'profile' || view === 'library' || view === 'collections')) render();
+  if (peopleOn() && idx && Store.isUnlocked() && !AI.isRunning()) startPeople();
 }
 function aiCard() {
   const on = aiOn(), st = AI.stats(idx);
@@ -640,7 +652,8 @@ function aiCard() {
     ${on ? `<div class="row"><div class="meta">Index library<small id="aiStatus">${aiStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button></div>
     <div class="row"><div class="meta">Duplicates &amp; similar<small>Review look-alikes side by side and keep the best</small></div><button class="btn btn-ghost btn-sm" id="aiDup">Review</button></div>
     <div class="row"><div class="meta">Best shots<small>Pick the best of bursts and look-alikes, archive the rest</small></div><button class="btn btn-ghost btn-sm" id="aiBest">Review</button></div>
-    <div class="row"><div class="meta">Smart rules<small>${(idx.settings.rules || []).length ? (idx.settings.rules || []).filter(r => r.on).length + ' active · auto-move items by tag or AI search' : 'Auto-move items by tag or AI search into the Vault or a collection'}</small></div><button class="btn btn-ghost btn-sm" id="aiRules">Manage</button></div>
+    <div class="row"><div class="meta">Smart rules<small>${(idx.settings.rules || []).length ? (idx.settings.rules || []).filter(r => r.on).length + ' active · auto-move items by tag, AI search or person' : 'Auto-move items by tag, AI search or person into the Vault or a collection'}</small></div><button class="btn btn-ghost btn-sm" id="aiRules">Manage</button></div>
+    ${peopleCardRows()}
     <div class="row"><div class="meta">AI data<small>Encrypted on this device. AI model ≈ ${AI.MODEL_MB} MB, downloaded once and works offline.</small></div><span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe" style="margin-left:8px">Remove</button></div>` : ''}
     ${idx.items.some(i => i.archived) ? `<div class="row"><div class="meta">Archive<small>Hidden extras kept encrypted on this device</small></div><span class="v">${idx.items.filter(i => i.archived).length}</span><button class="btn btn-ghost btn-sm" id="aiArch" style="margin-left:8px">Open</button></div>` : ''}
   </div>`;
@@ -652,12 +665,132 @@ function bindAICard() {
     if (!s.ai.on) {
       if (!(await confirmBox('Turn on on-device AI?', (host ? `Velvet will use its built-in AI model (about ${AI.MODEL_MB} MB, included with the app). ` : `Velvet will download its AI model (about ${AI.MODEL_MB} MB) once from this app’s own site, then work offline. `) + `Your photos are analysed only on this device. Nothing is uploaded, ever. Indexing runs in the background and pauses when Velvet is hidden.`, 'Turn on'))) return;
       s.ai.on = true; await save(); await AI.open(idx); renderProfile(); startAI();
-    } else { s.ai.on = false; AI.stop(); await save(); renderProfile(); render(); }
+    } else { s.ai.on = false; AI.stop(); People.stop(); await save(); renderProfile(); render(); }
   };
+  bindPeopleCard();
   const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
   const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
   const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
 }
+/* ---------- People (v1.4): on-device face grouping ---------- */
+const peopleOn = () => aiOn() && People.on(idx);
+let pplProg = null, curPerson = null, showHiddenPeople = false;
+const visibleId = id => { const it = itemById(id); return !!(it && !it.vault && !it.archived); };
+// face avatar: photos crop their (encrypted, already cached) thumbnail with CSS; video faces carry a tiny encrypted crop
+function faceHTML(f, cls = '') {
+  if (!f) return `<span class="face ${cls} none">${IC.user}</span>`;
+  if (f.c) return `<span class="face ${cls}"><img alt="" src="data:image/jpeg;base64,${f.c}" style="width:100%;height:100%;left:0;top:0"></span>`;
+  const it = itemById(f.itemId), W = (it && it.w) || 1000, H = (it && it.h) || Math.round(1000 / ((it && it.ar) || 1));
+  const side = Math.max(f.b[2] * W, f.b[3] * H) * 1.45, sx = side / W, sy = side / H, cx = f.b[0] + f.b[2] / 2, cy = f.b[1] + f.b[3] / 2 - f.b[3] * .04;
+  const st = `width:${(100 / sx).toFixed(2)}%;height:${(100 / sy).toFixed(2)}%;left:${(-(cx - sx / 2) / sx * 100).toFixed(2)}%;top:${(-(cy - sy / 2) / sy * 100).toFixed(2)}%`;
+  return `<span class="face ${cls}"><img alt="" data-tid="${f.itemId}" style="${st}"></span>`;
+}
+function peopleList({ hidden = false } = {}) {
+  return People.people().map((p, i) => ({ p, i, n: People.itemsOf(p, visibleId).length })).filter(x => x.n && (hidden || !x.p.hidden))
+    .sort((a, b) => (!!b.p.name - !!a.p.name) || b.n - a.n);
+}
+const pName = p => p.name || 'Unnamed';
+function personCard(x, k) {
+  return `<button class="pcard ${x.p.hidden ? 'hidden' : ''}" data-person="${x.p.id}" style="--i:${k}">${faceHTML(People.cover(x.p, visibleId))}<b>${esc(pName(x.p))}</b><small>${x.n} item${x.n === 1 ? '' : 's'}${x.p.hidden ? ' · hidden' : ''}</small></button>`;
+}
+function bindPeople(root) { hydrateCovers(root); root.querySelectorAll('[data-person]').forEach(b => b.onclick = () => openPerson(b.dataset.person)); }
+function peopleRowHTML(title) {
+  if (!peopleOn() || !People.isOpen()) return '';
+  const L = peopleList().slice(0, 14);
+  if (!L.length) return `<div class="sub-h smart-h">${IC.people}People</div><div class="smart-empty">${IC.people}<span>${People.isRunning() || (pplProg && pplProg.phase === 'indexing') ? 'Finding faces on this device…' : 'People appear here when someone shows up in at least two photos or videos.'}</span></div>`;
+  return `<div class="sub-h smart-h people-h">${IC.people}${title}<button class="btn btn-ghost btn-sm" data-nav="people">See all</button></div><div class="prow">${L.map(personCard).join('')}</div>`;
+}
+async function renderPeopleRow(sel) {
+  const el = $(sel); if (!el) return;
+  if (!peopleOn()) { el.innerHTML = ''; return; }
+  await People.open(idx); el.innerHTML = peopleRowHTML('People'); bindPeople(el);
+}
+function openPerson(id) { curPerson = id; nav('person'); }
+function renderPeople() {
+  const body = $('#peopleBody'); if (!body) return;
+  if (!peopleOn()) { body.innerHTML = `<div class="empty"><b>People is off</b>Turn it on in Profile → On-device AI → People.</div>`; return; }
+  if (!People.isOpen()) { People.open(idx).then(() => view === 'people' && renderPeople()); body.innerHTML = '<div class="lb-loading" style="margin:40px auto"></div>'; return; }
+  const all = peopleList({ hidden: true }), L = all.filter(x => showHiddenPeople || !x.p.hidden), nh = all.filter(x => x.p.hidden).length, st = People.stats(idx);
+  body.innerHTML = `<div class="section-title"><h2>People</h2><span>${L.length} ${L.length === 1 ? 'person' : 'people'}</span></div>
+    <p class="sub-note">Faces are found and grouped on this device. Names and face data are encrypted and never leave it. ${People.isRunning() ? `Finding faces… ${pplProg && pplProg.total ? `${pplProg.done}/${pplProg.total}` : ''}` : `${st.faces} faces in ${st.indexed} of ${st.total} items`}</p>
+    ${nh ? `<div class="dact top"><button class="btn btn-ghost btn-sm" id="pplHidden">${showHiddenPeople ? 'Hide hidden people' : `Show hidden (${nh})`}</button></div>` : ''}
+    <div class="pgrid">${L.map(personCard).join('') || `<div class="empty"><b>No people yet</b>People appear when someone shows up in at least two photos or videos.</div>`}</div>`;
+  bindPeople(body); hydrateIcons(body);
+  const hb = $('#pplHidden'); if (hb) hb.onclick = () => { showHiddenPeople = !showHiddenPeople; renderPeople(); };
+}
+const remapRules = (from, to) => (idx.settings.rules || []).forEach(r => { if (r.kind === 'person' && r.value === from) r.value = to; });
+async function peopleChanged(msg) { await People.persist(idx); smartCache = null; if (msg) toast(msg); await applyRules({ quiet: false }).catch(() => { }); }
+function renderPerson() {
+  const body = $('#personBody'); if (!body) return;
+  if (!peopleOn() || !People.isOpen()) { nav('people'); return; }
+  const p = People.person(curPerson); if (!p) { nav('people'); return; }
+  const items = People.itemsOf(p, visibleId).map(itemById), cv = People.cover(p, visibleId);
+  const faces = p.faces.map(People.faceInfo).filter(f => f && visibleId(f.itemId));
+  body.innerHTML = `<div class="phero">${faceHTML(cv, 'big')}<div class="pmeta"><h2 id="pName" class="${p.name ? '' : 'unnamed'}">${esc(p.name || 'Add a name')}</h2><p>${items.length} item${items.length === 1 ? '' : 's'} · ${faces.length} face${faces.length === 1 ? '' : 's'}${p.hidden ? ' · hidden' : ''}</p>
+      <div class="pact"><button class="btn btn-primary btn-sm" id="pRen">${IC.edit || IC.tag}<span>${p.name ? 'Rename' : 'Name'}</span></button><button class="btn btn-ghost btn-sm" id="pMerge">${IC.people}<span>Merge…</span></button>
+      <button class="btn btn-ghost btn-sm" id="pReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="pRule">${IC.vault}<span>Auto-move…</span></button><button class="btn btn-ghost btn-sm" id="pHide">${p.hidden ? 'Unhide' : 'Hide'}</button></div></div></div>
+    <div class="sub-h">Faces<span class="sub-hint">Tap faces that aren’t ${esc(p.name || 'this person')} to fix the group</span></div>
+    <div class="frow" id="pFaces">${faces.map(f => `<button class="fpick" data-fk="${esc(f.key)}" title="${esc((itemById(f.itemId) || {}).title || '')}">${faceHTML(f)}<i>${IC.check}</i></button>`).join('')}</div>
+    <div class="dact top fbar" id="pFbar"><span id="pSel">0 selected</span><button class="btn btn-ghost btn-sm" id="pNot">Not ${esc(p.name || 'this person')}</button><button class="btn btn-ghost btn-sm" id="pSplit">Move to new person</button><button class="btn btn-ghost btn-sm" id="pMove">Move to…</button></div>
+    <div class="sub-h">Photos &amp; videos</div><div class="grid" id="personGrid"></div>`;
+  hydrateIcons(body); hydrateCovers(body); bindGrid($('#personGrid'));
+  renderGrid($('#personGrid'), sortNew(items), `<div class="empty"><b>Nothing to show</b>Their photos may be in the Vault or archived.</div>`);
+  const picked = () => [...body.querySelectorAll('.fpick.on')].map(b => b.dataset.fk);
+  const upd = () => { const n = picked().length; $('#pSel').textContent = `${n} selected`; $('#pFbar').classList.toggle('show', n > 0); };
+  body.querySelectorAll('.fpick').forEach(b => b.onclick = () => { b.classList.toggle('on'); upd(); });
+  $('#pRen').onclick = $('#pName').onclick = async () => {
+    const n = await promptBox(p.name ? 'Rename person' : 'Name this person', 'Names are encrypted and stay on this device. Use the same name on two people to merge them.', p.name, 'Save'); if (n == null) return;
+    const other = n.trim() && People.byName(n); if (other && other !== p) { if (!(await confirmBox('Merge people?', `“${esc(n.trim())}” already exists. Merge these faces into that person?`, 'Merge'))) return; People.merge(other.id, p.id); remapRules(p.id, other.id); curPerson = other.id; await peopleChanged(`Merged into ${n.trim()}`); renderPerson(); return; }
+    People.rename(p.id, n); await peopleChanged(n.trim() ? `Named “${n.trim()}”` : 'Name removed'); renderPerson(); };
+  $('#pHide').onclick = async () => { People.setHidden(p.id, !p.hidden); await peopleChanged(p.hidden ? `${pName(p)} is hidden from People and search` : `${pName(p)} is visible again`); renderPerson(); };
+  $('#pReel').onclick = () => openReel(items, p.name || 'Person');
+  $('#pRule').onclick = () => addRuleDialog({ person: p.id });
+  const pickPerson = async (title, text) => { const L = peopleList({ hidden: true }).filter(x => x.p !== p); if (!L.length) { toast('There’s nobody else to pick yet'); return null; }
+    return modal(`<h3>${esc(title)}</h3><p>${text}</p><div class="pgrid pick">${L.map(personCard).join('')}</div><div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button></div>`, (m, close) => { bindPeople(m); m.querySelectorAll('[data-person]').forEach(b => b.onclick = () => close(b.dataset.person)); }); };
+  $('#pMerge').onclick = async () => { const id = await pickPerson('Merge with…', `Pick the same person to combine their faces with ${esc(pName(p))}.`); if (!id || typeof id !== 'string') return; const o = People.person(id); People.merge(p.id, id); remapRules(id, p.id); await peopleChanged(`Merged ${esc(pName(o))} into ${pName(p)}`); renderPerson(); };
+  $('#pNot').onclick = async () => { const ks = picked(); if (!ks.length) return; People.notThis(p.id, ks); People.recluster(); await peopleChanged(`Removed ${ks.length} face${ks.length === 1 ? '' : 's'} from ${pName(p)}`); People.person(p.id) ? renderPerson() : nav('people'); };
+  $('#pSplit').onclick = async () => { const ks = picked(); if (!ks.length) return; const q = People.moveFaces(p.id, ks); await peopleChanged(`Moved ${ks.length} face${ks.length === 1 ? '' : 's'} to a new person`); openPerson(q.id); };
+  $('#pMove').onclick = async () => { const ks = picked(); if (!ks.length) return; const id = await pickPerson('Move faces to…', 'Pick who these faces belong to.'); if (!id || typeof id !== 'string') return; People.moveFaces(p.id, ks, id); await peopleChanged(`Moved ${ks.length} face${ks.length === 1 ? '' : 's'}`); People.person(p.id) ? renderPerson() : openPerson(id); };
+}
+function pplStatusText() {
+  if (!idx || !People.isOpen()) return 'Faces are found on this device only';
+  const st = People.stats(idx), p = pplProg;
+  if (p && p.phase === 'loading') return 'Loading the face models…';
+  if (p && p.phase === 'indexing') return `Finding faces ${p.done} of ${p.total}${p.msPer ? ` · ${(p.msPer / 1000).toFixed(1)} s/item` : ''}`;
+  if (p && p.phase === 'paused') return `Paused while Velvet is in the background (${p.done} of ${p.total})`;
+  const n = peopleList({ hidden: true }).length; return `${n} ${n === 1 ? 'person' : 'people'} · ${st.faces} faces · ${st.indexed} of ${st.total} items checked`;
+}
+async function startPeople() {
+  if (!peopleOn() || People.isRunning() || !Store.isUnlocked()) return;
+  if (AI.isRunning()) return; // startAI() chains into startPeople() when it finishes; they share one worker
+  const thumbBlob = async it => it.thumb ? Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg') : null;
+  const fileBlob = async it => new File([await Store.readFile(it.id, it.chunks, it.mime)], it.name || it.title, { type: it.mime });
+  const refresh = () => { if (!idx) return; if (view === 'people') renderPeople(); else if (view === 'collections') renderPeopleRow('#peopleRow'); else if (view === 'search' && !$('#q').value) renderPeopleRow('#searchPeople'); };
+  try {
+    await People.indexFaces({ idx, thumbBlob, fileBlob, maxVideoBytes: isIOS ? 150 * 1024 ** 2 : 1024 ** 3,
+      onProgress: p => { pplProg = p; drawAIChip(); const s = $('#pplStatus'); if (s) s.textContent = pplStatusText(); }, onBatch: refresh });
+  } catch (e) { console.warn('People indexing', e); pplProg = { phase: 'error' }; drawAIChip(); toast('People couldn’t start: ' + (e.message || e)); }
+  if (idx && Store.isUnlocked()) { await applyRules().catch(e => console.warn('rules', e)); refresh(); if (view === 'profile') { const s = $('#pplStatus'); if (s) s.textContent = pplStatusText(); } }
+}
+function peopleCardRows() {
+  const on = People.on(idx), st = People.isOpen() ? People.stats(idx) : null;
+  return `<div class="row">${IC.people}<div class="meta">People<small>Group faces into people, name them and search by name. Face data is encrypted and stays on this device.</small></div><button class="switch" role="switch" id="pplSw" aria-checked="${on}" aria-label="People"></button></div>
+    ${on ? `<div class="row"><div class="meta">Faces<small id="pplStatus">${pplStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="pplOpen">Open</button></div>
+    <div class="row"><div class="meta">People data<small>Encrypted on this device. Face models ≈ ${People.MODEL_MB} MB, downloaded once.</small></div><span class="v">${bytes((st && st.bytes) || (idx.settings.faces && idx.settings.faces.file && idx.settings.faces.file.stored) || 0)}</span><button class="btn btn-ghost btn-sm" id="pplWipe" style="margin-left:8px">Remove</button></div>` : ''}`;
+}
+function bindPeopleCard() {
+  const sw = $('#pplSw'); if (!sw) return;
+  sw.onclick = async () => {
+    const s = idx.settings; s.faces = s.faces || {};
+    if (!s.faces.on) {
+      if (!(await confirmBox('Turn on People?', (host ? `Velvet will use its built-in face models (about ${People.MODEL_MB} MB). ` : `Velvet will download two small face models (about ${People.MODEL_MB} MB) once from this app’s own site. `) + 'It finds faces in your photos and videos <b>on this device only</b> and groups them into people. Face data and names are encrypted with your passcode and never uploaded. You can remove it any time.', 'Turn on'))) return;
+      s.faces.on = true; await save(); await People.open(idx); renderProfile(); startPeople();
+    } else { s.faces.on = false; People.stop(); await save(); renderProfile(); toast('People is off. Face data is kept (encrypted) until you remove it.'); }
+  };
+  const ob = $('#pplOpen'); if (ob) ob.onclick = () => nav('people');
+  const wb = $('#pplWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove People data?', 'Deletes all face data and names from this device and turns People off. Person-based smart rules are paused. Your photos and videos stay.', 'Remove', true))) return; await People.wipe(idx); pplProg = null; renderProfile(); toast('People data removed'); };
+}
+
 /* ---------- duplicates & similar ---------- */
 let dupState = null;
 $('#dupBack').onclick = () => nav('profile');
@@ -751,6 +884,7 @@ async function deleteItems(ids) {
     idx.items = idx.items.filter(x => x.id !== id); idx.collections.forEach(c => { if (c.cover === id) c.cover = null; });
   }
   AI.forget(ids); if (aiOn()) await AI.persist(idx).catch(() => { });
+  if (People.isOpen()) { People.forget(ids); await People.persist(idx).catch(() => { }); }
   await save(); render(); toast(`Deleted ${n} item${n === 1 ? '' : 's'}`); return true;
 }
 function setVault(ids, on) { ids.forEach(id => { const it = itemById(id); if (it) it.vault = on; }); save(); render(); toast(on ? `Moved ${ids.length} to the Vault` : `Moved ${ids.length} back to the Library`); }
@@ -1260,18 +1394,24 @@ function renderRules() {
   $('#ruleAdd').onclick = addRuleDialog;
   const rr = $('#ruleRun'); if (rr) rr.onclick = async () => { const n = await applyRules(); if (!n) toast('Rules ran: nothing new to move'); renderRules(); };
 }
-async function addRuleDialog() {
+async function addRuleDialog(pre = {}) {
+  const PL = peopleOn() && People.isOpen() ? peopleList({ hidden: true }) : [];
   const tags = [...new Set(idx.items.flatMap(i => [...(i.tags || []), ...(i.aiTags || [])]))].sort();
   const res = await modal(`<h3>New smart rule</h3>
-    <div class="rule-form"><label class="fl">When an item is</label><select class="field" id="rKind"><option value="tag">tagged</option>${AI.hasIndex() ? '<option value="search">looking like (AI search)</option>' : ''}</select>
+    <div class="rule-form"><label class="fl">When an item is</label><select class="field" id="rKind"><option value="tag">tagged</option>${AI.hasIndex() ? '<option value="search">looking like (AI search)</option>' : ''}${PL.length ? '<option value="person">showing a person (People)</option>' : ''}</select>
     <input class="field" id="rVal" placeholder="e.g. beach" list="rTags" autocomplete="off"><datalist id="rTags">${tags.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+    ${PL.length ? `<select class="field" id="rPer" style="display:none">${PL.map(x => `<option value="${x.p.id}">${esc(pName(x.p))} · ${x.n} item${x.n === 1 ? '' : 's'}</option>`).join('')}</select>` : ''}
     <label class="fl">then</label><select class="field" id="rAct"><option value="vault">move it to the Vault</option>${idx.collections.map(c => `<option value="col:${c.id}">add it to “${esc(c.name)}”</option>`).join('')}<option value="new">add it to a new collection…</option></select>
     <label class="chk"><input type="checkbox" id="rNow" checked> Also apply to items already in my library</label><p class="sub-note" id="rPrev"></p></div>
     <div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button><button class="btn btn-primary" data-ok>Create rule</button></div>`, (m, close) => {
-    const prev = async () => { const v = m.querySelector('#rVal').value.trim(), p = m.querySelector('#rPrev'); if (!v) { p.textContent = ''; return; }
+    const kindEl = m.querySelector('#rKind'), perEl = m.querySelector('#rPer'), valEl = m.querySelector('#rVal');
+    const getVal = () => kindEl.value === 'person' ? (perEl ? perEl.value : '') : valEl.value.trim();
+    const sync = () => { const per = kindEl.value === 'person'; valEl.style.display = per ? 'none' : ''; if (perEl) perEl.style.display = per ? '' : 'none'; };
+    const prev = async () => { sync(); const v = getVal(), p = m.querySelector('#rPrev'); if (!v) { p.textContent = ''; return; }
       const r = { id: '_', kind: m.querySelector('#rKind').value, value: v, action: 'vault' }; const n = (await Smart.matchRule(r, idx.items.filter(i => !i.vault))).length; p.textContent = `${n} item${n === 1 ? '' : 's'} in your library match right now.`; };
-    let t; m.querySelector('#rVal').addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 350); }); m.querySelector('#rKind').onchange = prev;
-    m.querySelector('[data-ok]').onclick = () => { const v = m.querySelector('#rVal').value.trim(); if (!v) { m.querySelector('#rVal').focus(); return; } close({ kind: m.querySelector('#rKind').value, value: v.slice(0, 80), act: m.querySelector('#rAct').value, now: m.querySelector('#rNow').checked }); };
+    let t; m.querySelector('#rVal').addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 350); }); kindEl.onchange = prev; if (perEl) perEl.onchange = prev;
+    if (pre.person && perEl) { kindEl.value = 'person'; perEl.value = pre.person; prev(); }
+    m.querySelector('[data-ok]').onclick = () => { const v = getVal(); if (!v) { valEl.focus(); return; } close({ kind: kindEl.value, value: v.slice(0, 80), act: m.querySelector('#rAct').value, now: m.querySelector('#rNow').checked }); };
   });
   if (!res || typeof res !== 'object') return;
   let action = 'vault', col = null;
@@ -1287,6 +1427,7 @@ async function addRuleDialog() {
 async function exportBackup() {
   const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); if (i.chap && i.chap.file) files.push({ id: i.chap.file.id, n: i.chap.file.chunks }); });
   const aif = idx.settings.ai && idx.settings.ai.file; if (aif) files.push({ id: aif.id, n: aif.chunks });
+  const pff = idx.settings.faces && idx.settings.faces.file; if (pff) files.push({ id: pff.id, n: pff.chunks });
   const total = idx.items.reduce((a, i) => a + (i.stored || 0) + ((i.thumb && i.thumb.stored) || 0), 0);
   const name = `velvet-backup-${new Date().toISOString().slice(0, 10)}.velvet`;
   if (!(await confirmBox('Export encrypted backup', `This creates <b>${esc(name)}</b> (about ${bytes(total)}). It’s encrypted with your current passcode, so you’ll need that passcode to restore it on any device.`, 'Export'))) return;
@@ -1318,7 +1459,7 @@ $('#restoreFile').addEventListener('change', async e => {
   try {
     const ok = await Store.restoreBackup(f, pass, p => progress('Restoring backup', p)); progress(null);
     if (!ok) { toast('Wrong passcode for this backup.', 4000); if (!had) gateSetup(); return; }
-    for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear(); fulls.clear(); await AI.shutdown();
+    for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear(); fulls.clear(); await AI.shutdown(); People.shutdown();
     idx = await Store.loadIndex(); afterUnlock(false); toast('Backup restored', 3500);
   } catch (err) { progress(null); toast('Restore failed: ' + err.message, 6000); if (!(await Store.isSetUp())) gateSetup(); }
 });
@@ -1344,4 +1485,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
 })();
-window.Velvet = { toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

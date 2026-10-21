@@ -1,5 +1,6 @@
 // Velvet batch 2: smart albums, best-shot picker and smart rules. Pure on-device logic over the encrypted AI index.
 import * as AI from './ai.js';
+import * as People from './people.js';
 
 const KIND = { scene: 'place', setting: 'place', object: 'theme', animal: 'theme', activity: 'theme', people: 'theme', season: 'theme', light: 'theme', style: 'theme' };
 const SKIP = new Set(['indoor', 'outdoor', 'sky', 'clouds', 'screenshot', 'document', 'close-up', 'smiling', 'woman', 'man', 'trees', 'plants', 'field', 'travel']);
@@ -93,13 +94,15 @@ export function rankShots(list) {
 /* ---------- smart rules ---------- */
 // rule: { id, on, kind: 'tag'|'search', value, action: 'vault'|'col', col, name }
 export function describe(r, colName) {
-  const what = r.kind === 'tag' ? `tagged “${r.value}”` : `looking like “${r.value}”`;
+  const pp = r.kind === 'person' ? People.person(r.value) : null;
+  const what = r.kind === 'tag' ? `tagged “${r.value}”` : r.kind === 'person' ? (pp && pp.name ? `showing “${pp.name}”` : pp ? 'showing an unnamed person' : 'showing a person (People is off)') : `looking like “${r.value}”`;
   return `Items ${what} → ${r.action === 'vault' ? 'Vault' : `collection “${colName || '?'}”`}`;
 }
 // returns ids that match a rule among candidates (ignores items this rule already handled)
 export async function matchRule(r, items) {
   const cand = items.filter(it => !it.archived && !(it.ruled || []).includes(r.id) && !(r.action === 'vault' && it.vault) && !(r.action === 'col' && (it.cols || []).includes(r.col)));
   if (r.kind === 'tag') { const v = r.value.toLowerCase(); return cand.filter(it => [...tagsOf(it)].some(t => t.toLowerCase() === v)).map(it => it.id); }
+  if (r.kind === 'person') { if (!People.isOpen()) return []; const ids = new Set(People.itemsOf(r.value)); return cand.filter(it => ids.has(it.id)).map(it => it.id); }
   if (!AI.hasIndex()) return [];
   return (await AI.matchQuery(r.value, cand.map(i => i.id))).map(x => x[0]);
 }

@@ -1,10 +1,10 @@
 // Velvet service worker: caches the app shell so Velvet opens fully offline.
 // It never sees your photos/videos (those live encrypted in IndexedDB and are decrypted in the page).
-const VERSION = 'velvet-v6';
+const VERSION = 'velvet-v7';
 // AI model + runtime (~93 MB) live in their own cache so app updates don't re-download them
 const MODELS = 'velvet-ai-v1';
 const isModel = p => p.includes('/models/') || p.includes('/js/vendor/transformers/');
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'js/app.js', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/ai.js', 'js/ai-worker.js',
+const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'js/app.js', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/people.js', 'js/ai.js', 'js/ai-worker.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/favicon.png',
   'fonts/GreatVibes-normal-400.woff2', 'fonts/Inter-normal-300.woff2', 'fonts/Inter-normal-400.woff2', 'fonts/Inter-normal-500.woff2', 'fonts/Inter-normal-600.woff2',
   'fonts/PlayfairDisplay-italic-400.woff2', 'fonts/PlayfairDisplay-italic-500.woff2', 'fonts/PlayfairDisplay-normal-500.woff2'];
