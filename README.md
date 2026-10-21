@@ -16,3 +16,13 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 **New in v1.3:** video chapters (on-device scene detection, chapter marks with thumbnails on the scrubber, tap to jump, AI chapter names) and highlight reels (the best moments of a video, collection or selection played as one seamless reel, with optional save as a new silent, encrypted video where the browser supports recording).
 
 **New in v1.4:** People. Velvet can find faces in your photos and video frames and group them into people. You can name them, merge or split groups, mark "not this person", hide someone, search by name, and add smart rules ("person X → Vault or a collection"). It's opt-in under Profile → On-device AI → People. It uses OpenCV Zoo's YuNet (MIT) and SFace (Apache-2.0) models: ≈39 MB, downloaded once from this site. All face data and names are encrypted on your device and never uploaded.
+
+**v1.4.1:** fixes video previews in Safari on iPhone:
+- keyframe decoding when Safari blocks video playback;
+- one tap-unlocked video element;
+- faster app updates;
+- **Preview diagnostics** with *Copy report*;
+- warnings for Private Browsing, Block All Cookies and Lockdown Mode;
+- better People avatars;
+- *Save as collection* now hides the auto album, and any auto album can be hidden or restored;
+- age-related auto-tags are removed.

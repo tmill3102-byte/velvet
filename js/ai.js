@@ -26,11 +26,18 @@ export function shutdown() { clearTimeout(idleT); if (worker) worker.terminate()
 
 /* ---------- vocabulary (precomputed text embeddings for auto-tags; not user data) ---------- */
 let vocab = null;
+// Age-related labels are never produced (auto-tags, smart albums, chapter names), whatever vocabulary file is cached.
+export const BLOCKED_TAGS = new Set(['child', 'children', 'kid', 'kids', 'baby', 'babies', 'toddler', 'toddlers', 'infant', 'infants', 'teen', 'teens', 'teenager', 'teenagers',
+  'minor', 'minors', 'boy', 'boys', 'girl', 'girls', 'youth', 'elderly', 'senior', 'seniors', 'adult', 'adults']);
+export const isBlockedTag = t => BLOCKED_TAGS.has(String(t || '').trim().toLowerCase());
+export const hasBlockedWord = s => String(s || '').toLowerCase().split(/[^a-z]+/).some(w => BLOCKED_TAGS.has(w));
 async function loadVocab() {
   if (vocab) return vocab;
-  const j = await (await fetch(new URL('../models/velvet-vocab-v1.json', import.meta.url))).json();
+  const j = await (await fetch(new URL('../models/velvet-vocab-v2.json', import.meta.url))).json();
   const raw = Uint8Array.from(atob(j.emb), c => c.charCodeAt(0));
-  vocab = { tags: j.tags, E: new Float32Array(raw.buffer), dim: j.dim }; return vocab;
+  const E0 = new Float32Array(raw.buffer), keep = j.tags.map((t, i) => i).filter(i => !isBlockedTag(j.tags[i][0]));
+  const E = new Float32Array(keep.length * j.dim); keep.forEach((i, k) => E.set(E0.subarray(i * j.dim, (i + 1) * j.dim), k * j.dim));
+  vocab = { tags: keep.map(i => j.tags[i]), E, dim: j.dim }; return vocab;
 }
 
 /* ---------- encrypted AI sidecar ---------- */
@@ -110,7 +117,7 @@ export async function indexLibrary(ctx) {
           const tags = list.length ? zeroShot(meanVec(list)) : [];
           if (an) { if (an.bw) { if (!tags.includes('black & white')) tags.push('black & white'); } else an.colors.forEach(c => tags.push(c)); }
           const rej = new Set(it.aiRej || []), mine = new Set(it.tags || []);
-          it.aiTags = [...new Set(tags)].filter(t => !rej.has(t) && !mine.has(t)).slice(0, 7);
+          it.aiTags = [...new Set(tags)].filter(t => !rej.has(t) && !mine.has(t) && !isBlockedTag(t)).slice(0, 7);
         }
       } catch (e) { console.warn('AI index failed', it.name, e); data.items[it.id] = { s: [], n: 0, none: 1, err: String(e.message || e).slice(0, 80) }; }
       done++; dirty++;

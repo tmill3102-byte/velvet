@@ -207,13 +207,14 @@ function afterUnlock(first) {
   if (first) setTimeout(() => toast('Your gallery is ready. Import something to begin.'), 600);
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if (aiOn() && People.on(idx)) People.open(idx).then(() => { if (view === 'collections') renderPeopleRow('#peopleRow'); }).catch(e => console.warn('People open', e));
+  if (scrubBlockedTags()) save().catch(() => { });
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
 }
 function lockNow() { try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear();
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
   AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
-  Store.lock(); idx = null; vaultOpen = false;
+  Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
   ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
@@ -243,12 +244,19 @@ async function pumpThumbs() {
       try {
         let u = thumbs.get(it.id);
         if (!u && it.thumb && Store.isUnlocked()) { const b = await Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg'); if (!Store.isUnlocked()) return; u = URL.createObjectURL(b); thumbs.set(it.id, u); }
-        if (u && img.isConnected) { img.src = u; img.onload = () => { img.classList.add('ok'); img.parentElement && img.parentElement.classList.add('ready'); }; }
-        else if (img.parentElement) img.parentElement.classList.add('ready');
-      } catch (e) { console.warn('thumb', e); if (img.parentElement) img.parentElement.classList.add('ready'); }
+        if (u && img.isConnected) { img.onload = () => { img.classList.add('ok'); img.parentElement && img.parentElement.classList.add('ready'); }; img.onerror = () => thumbBroken(it, img, 'stored preview image failed to load'); img.src = u; }
+        else if (img.parentElement) { img.parentElement.classList.add('ready'); if (!u && it.thumb && Store.isUnlocked()) thumbBroken(it, img, 'stored preview missing'); }
+      } catch (e) { console.warn('thumb', e); thumbBroken(it, img, 'stored preview could not be decrypted: ' + (e.message || e)); }
       finally { thumbBusy--; pumpThumbs(); }
     })();
   }
+}
+const tileErrs = new Map();   // this session only: previews that exist but can't be shown
+function thumbBroken(it, img, why) {
+  if (!Store.isUnlocked() || !img.isConnected) return;     // locking revokes the URLs: not a broken preview
+  tileErrs.set(it.id, why);
+  const media = img.parentElement; if (!media) return; media.classList.add('ready');
+  const tile = img.closest('.tile'); if (tile && !tile.classList.contains('nothumb')) { tile.classList.add('nothumb'); img.remove(); media.insertAdjacentHTML('beforeend', phHTML(it)); }
 }
 const io = new IntersectionObserver(ents => ents.forEach(en => { if (en.isIntersecting) { io.unobserve(en.target); const it = itemById(en.target.dataset.tid); if (it) wantThumb(it, en.target); } }), { rootMargin: '400px' });
 
@@ -256,7 +264,15 @@ const io = new IntersectionObserver(ents => ents.forEach(en => { if (en.isInters
 const ctx = new WeakMap();
 function tileHTML(it, i, opts = {}) {
   const v = it.type === 'video';
-  const ph = it.thumb ? '' : `<div class="ph">${v ? IC.play.replace('<svg', '<svg class="phic"') : IC.photo.replace('<svg', '<svg class="phic"')}<small>${v ? (Thumbs.isHevc(it.codec) ? 'HEVC video' : 'Video') : (Thumbs.isHeic(it.mime, it.name) ? 'HEIC photo' : 'Photo')} · no preview</small></div>`;
+  const ph = it.thumb ? '' : phHTML(it);
+  return tileInner(it, i, opts, ph);
+}
+function phHTML(it) {
+  const v = it.type === 'video';
+  return `<div class="ph">${v ? IC.play.replace('<svg', '<svg class="phic"') : IC.photo.replace('<svg', '<svg class="phic"')}<small>${v ? (Thumbs.isHevc(it.codec) ? 'HEVC video' : 'Video') : (Thumbs.isHeic(it.mime, it.name) ? 'HEIC photo' : 'Photo')} · no preview</small></div>`;
+}
+function tileInner(it, i, opts, ph) {
+  const v = it.type === 'video';
   return `<div class="tile${it.thumb ? '' : ' nothumb'}${opts.veiled ? ' veiled' : ''}${sel.has(it.id) ? ' picked' : ''}" data-id="${it.id}" style="--ar:${Math.max(.5, Math.min(2, it.ar || 1))};--fb:${fbFor(it.id)};--i:${i % 14}" tabindex="0" role="button" aria-label="${esc(it.title)}">
     <div class="media"><img alt="" data-tid="${it.id}">${ph}</div><div class="tint user"></div><div class="shade"></div>
     ${v ? `<div class="playbub">${IC.play}</div><span class="dur">${fmt(it.dur)}</span>` : `<span class="badge">${it.mime === 'image/gif' ? '<b style="font-size:8px">GIF</b>' : IC.photo}</span>`}
@@ -500,6 +516,8 @@ async function renderProfile() {
       <div class="row">${IC.download}<div class="meta">Back up library<small>One encrypted .velvet file. Move it to another device and restore.</small></div><button class="btn btn-primary btn-sm" id="bkBtn">Export</button></div>
       <div class="row">${IC.upload}<div class="meta">Restore from backup<small>Replaces the library on this device</small></div><button class="btn btn-ghost btn-sm" id="rsBtn">Restore</button></div>
       ${host ? `<div class="row">${IC.folder}<div class="meta">Data folder<small>Where Velvet keeps its encrypted data</small></div><button class="btn btn-ghost btn-sm" id="dataBtn">Open</button></div>` : ''}
+      <div class="row">${IC.user}<div class="meta">Version<small id="verInfo">${APP_VER}</small></div>${!host && 'serviceWorker' in navigator ? '<button class="btn btn-ghost btn-sm" id="repairBtn">Reload app files</button>' : ''}</div>
+      <div class="row">${IC.spark}<div class="meta">Preview diagnostics<small id="pvSum">${pvSummary()}</small></div><button class="btn btn-ghost btn-sm" id="pvBtn">View</button></div>
       <div class="row">${IC.photo}<div class="meta">Regenerate previews<small>Rebuild thumbnails for everything already in Velvet</small></div><button class="btn btn-ghost btn-sm" id="regenBtn">Rebuild</button></div>
       <div class="row">${IC.trash}<div class="meta">Erase everything<small>Deletes the passcode and every file in Velvet</small></div><button class="btn btn-danger btn-sm" id="wipeBtn">Erase</button></div>
     </div>
@@ -513,7 +531,7 @@ async function renderProfile() {
   $$('#profileBody .switch').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if (k === 'autoChapters' && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when hidden' : 'Lock-when-hidden off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
-  bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
+  bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#pvBtn').onclick = previewDiagnostics; const rpb = $('#repairBtn'); if (rpb) rpb.onclick = repairAppFiles; renderEnvCard(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
 async function vaultPinFlow() {
   const s = idx.settings;
@@ -555,7 +573,14 @@ $('#file').addEventListener('change', e => { const fs = Array.from(e.target.file
 $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.files || []).map(f => ({ file: f, folder: (f.webkitRelativePath || '').split('/')[0] || null })); e.target.value = ''; importFiles(fs, null); });
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
-async function makeThumb(f, type, mime) { return type === 'video' ? Thumbs.videoThumb(f, mime) : Thumbs.imageThumb(f, mime); }
+async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
+const APP_VER = '1.4.1';
+// per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
+function notePreview(it, th, err) {
+  const d = (th && th.diag) || {};
+  it.pv = th && th.blob ? { ok: true, via: th.via || (it.type === 'video' ? 'element' : 'image'), at: Date.now() }
+    : { ok: false, at: Date.now(), cs: d.cs || '', why: String(err ? (err.message || err) : (th && th.err) || (it.type === 'photo' && Thumbs.isHeic(it.mime, it.name) ? 'HEIC could not be decoded here' : 'no frame could be decoded')).slice(0, 600) };
+}
 async function importFiles(entries, colId) {
   if (!idx) return;
   const ok = entries.filter(e => mimeOf(e.file)), skipped = entries.length - ok.length;
@@ -569,13 +594,14 @@ async function importFiles(entries, colId) {
     progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, done / ok.length);
     const id = uid();
     try {
-      let th = null; try { th = await withTimeout(makeThumb(f, type, mime), 45000); } catch (err) { console.warn('thumb failed', f.name, err); }
+      let th = null, thErr = null; try { th = await withTimeout(makeThumb(f, type, mime), isIOS ? 90000 : 45000); } catch (err) { thErr = err.message === 'timeout' ? new Error(`preview timed out after ${isIOS ? 90 : 45} s`) : err; console.warn('thumb failed', f.name, err); }
       if (type === 'photo' && !th && !Thumbs.isHeic(mime, f.name)) throw new Error('This image format can’t be displayed here');
       const res = await Store.putFile(id, f, p => progress(`Importing ${done + 1} of ${ok.length} · ${f.name}`, (done + p * .95) / ok.length));
       let thumb = null;
       if (th && th.blob) { const tr = await Store.putFile(id + '_t', th.blob); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
       const it = { id, type, title: f.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Untitled', name: f.name, ext: extOf(f.name), mime, size: f.size, chunks: res.chunks, stored: res.stored,
         added: Date.now() + done, modified: f.lastModified || null, taken: await Vision.captureDate(f, mime), tags: [], fav: false, cols: [], vault: view === 'vault', thumb, ar: th ? (th.w / th.h) : (type === 'video' ? 16 / 9 : 1), dur: th && th.dur || 0, w: th && th.w, h: th && th.h, codec: th && th.codec || '', thumbT: th && th.t != null ? th.t : null };
+      notePreview(it, th, thErr);
       if (colId && colById(colId)) it.cols.push(colId);
       if (e.folder) {
         let c = folderCols.get(e.folder) || idx.collections.find(x => x.name === e.folder);
@@ -652,6 +678,7 @@ function aiCard() {
     ${on ? `<div class="row"><div class="meta">Index library<small id="aiStatus">${aiStatusText()}</small></div><button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button></div>
     <div class="row"><div class="meta">Duplicates &amp; similar<small>Review look-alikes side by side and keep the best</small></div><button class="btn btn-ghost btn-sm" id="aiDup">Review</button></div>
     <div class="row"><div class="meta">Best shots<small>Pick the best of bursts and look-alikes, archive the rest</small></div><button class="btn btn-ghost btn-sm" id="aiBest">Review</button></div>
+    <div class="row"><div class="meta">Hidden auto albums<small>${Object.keys(idx.settings.smartHidden || {}).length ? Object.keys(idx.settings.smartHidden).length + ' hidden or saved as collections' : 'None. Hide an auto album from its ••• menu'}</small></div><button class="btn btn-ghost btn-sm" id="aiHid">Show hidden</button></div>
     <div class="row"><div class="meta">Smart rules<small>${(idx.settings.rules || []).length ? (idx.settings.rules || []).filter(r => r.on).length + ' active · auto-move items by tag, AI search or person' : 'Auto-move items by tag, AI search or person into the Vault or a collection'}</small></div><button class="btn btn-ghost btn-sm" id="aiRules">Manage</button></div>
     ${peopleCardRows()}
     <div class="row"><div class="meta">AI data<small>Encrypted on this device. AI model ≈ ${AI.MODEL_MB} MB, downloaded once and works offline.</small></div><span class="v" id="aiBytes">${bytes(st.bytes)}</span><button class="btn btn-ghost btn-sm" id="aiWipe" style="margin-left:8px">Remove</button></div>` : ''}
@@ -662,6 +689,7 @@ function bindAICard() {
   const sw = $('#aiSw'); if (!sw) return;
   sw.onclick = async () => {
     const s = idx.settings; s.ai = s.ai || {};
+    if (!s.ai.on && !hasWasm) { await modal(`<h3>On-device AI isn’t available here</h3><p>It needs WebAssembly, which this browser has turned off (usually Lockdown Mode). Everything else in Velvet still works. To use AI, exclude this site in Settings → Privacy &amp; Security → Lockdown Mode → Configure Web Browsing.</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
     if (!s.ai.on) {
       if (!(await confirmBox('Turn on on-device AI?', (host ? `Velvet will use its built-in AI model (about ${AI.MODEL_MB} MB, included with the app). ` : `Velvet will download its AI model (about ${AI.MODEL_MB} MB) once from this app’s own site, then work offline. `) + `Your photos are analysed only on this device. Nothing is uploaded, ever. Indexing runs in the background and pauses when Velvet is hidden.`, 'Turn on'))) return;
       s.ai.on = true; await save(); await AI.open(idx); renderProfile(); startAI();
@@ -669,7 +697,7 @@ function bindAICard() {
   };
   bindPeopleCard();
   const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
-  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
+  const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const hb = $('#aiHid'); if (hb) hb.onclick = hiddenAlbumsDialog; const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
   const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
 }
 /* ---------- People (v1.4): on-device face grouping ---------- */
@@ -679,11 +707,11 @@ const visibleId = id => { const it = itemById(id); return !!(it && !it.vault && 
 // face avatar: photos crop their (encrypted, already cached) thumbnail with CSS; video faces carry a tiny encrypted crop
 function faceHTML(f, cls = '') {
   if (!f) return `<span class="face ${cls} none">${IC.user}</span>`;
-  if (f.c) return `<span class="face ${cls}"><img alt="" src="data:image/jpeg;base64,${f.c}" style="width:100%;height:100%;left:0;top:0"></span>`;
-  const it = itemById(f.itemId), W = (it && it.w) || 1000, H = (it && it.h) || Math.round(1000 / ((it && it.ar) || 1));
-  const side = Math.max(f.b[2] * W, f.b[3] * H) * 1.45, sx = side / W, sy = side / H, cx = f.b[0] + f.b[2] / 2, cy = f.b[1] + f.b[3] / 2 - f.b[3] * .04;
-  const st = `width:${(100 / sx).toFixed(2)}%;height:${(100 / sy).toFixed(2)}%;left:${(-(cx - sx / 2) / sx * 100).toFixed(2)}%;top:${(-(cy - sy / 2) / sy * 100).toFixed(2)}%`;
-  return `<span class="face ${cls}"><img alt="" data-tid="${f.itemId}" style="${st}"></span>`;
+  if (f.c) return `<span class="face ${cls}"><img class="fit" alt="" src="data:image/jpeg;base64,${f.c}"></span>`;
+  // photos: crop the (encrypted, already cached, EXIF-oriented) thumbnail to the avatar square with CSS
+  const it = itemById(f.itemId), ar = (it && it.ar) || ((it && it.w && it.h) ? it.w / it.h : 1), r = People.avatarRect(f.b, ar);
+  const st = `width:${(100 / r[2]).toFixed(3)}%;height:${(100 / r[3]).toFixed(3)}%;left:${(-r[0] / r[2] * 100).toFixed(3)}%;top:${(-r[1] / r[3] * 100).toFixed(3)}%`;
+  return `<span class="face ${cls}"><img alt="" data-tid="${f.itemId}" data-crop="${r.map(x => x.toFixed(5)).join(',')}" style="${st}"></span>`;
 }
 function peopleList({ hidden = false } = {}) {
   return People.people().map((p, i) => ({ p, i, n: People.itemsOf(p, visibleId).length })).filter(x => x.n && (hidden || !x.p.hidden))
@@ -782,6 +810,7 @@ function bindPeopleCard() {
   const sw = $('#pplSw'); if (!sw) return;
   sw.onclick = async () => {
     const s = idx.settings; s.faces = s.faces || {};
+    if (!s.faces.on && !hasWasm) { await modal(`<h3>People isn’t available here</h3><p>Face grouping needs WebAssembly, which this browser has turned off (usually Lockdown Mode). Exclude this site in Settings → Privacy &amp; Security → Lockdown Mode → Configure Web Browsing to use it.</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
     if (!s.faces.on) {
       if (!(await confirmBox('Turn on People?', (host ? `Velvet will use its built-in face models (about ${People.MODEL_MB} MB). ` : `Velvet will download two small face models (about ${People.MODEL_MB} MB) once from this app’s own site. `) + 'It finds faces in your photos and videos <b>on this device only</b> and groups them into people. Face data and names are encrypted with your passcode and never uploaded. You can remove it any time.', 'Turn on'))) return;
       s.faces.on = true; await save(); await People.open(idx); renderProfile(); startPeople();
@@ -791,6 +820,124 @@ function bindPeopleCard() {
   const wb = $('#pplWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove People data?', 'Deletes all face data and names from this device and turns People off. Person-based smart rules are paused. Your photos and videos stay.', 'Remove', true))) return; await People.wipe(idx); pplProg = null; renderProfile(); toast('People data removed'); };
 }
 
+/* ---------- v1.4.1: remove age-related labels from existing libraries (no re-index needed) ---------- */
+function scrubBlockedTags() {
+  if (!idx) return 0; let n = 0;
+  const clean = a => { if (!Array.isArray(a)) return a; const b = a.filter(t => !AI.isBlockedTag(t)); n += a.length - b.length; return b; };
+  idx.items.forEach(it => {
+    if (it.tags) it.tags = clean(it.tags); if (it.aiTags) it.aiTags = clean(it.aiTags); if (it.aiRej) it.aiRej = clean(it.aiRej);
+    if (it.chap && Array.isArray(it.chap.labels)) it.chap.labels = it.chap.labels.map((l, k) => { const s = safeLabel(l, k); if (s !== l) n++; return s; });
+  });
+  const R = idx.settings.rules || [], keep = R.filter(r => !((r.kind === 'tag' || r.kind === 'search') && AI.hasBlockedWord(r.value)));
+  n += R.length - keep.length; if (R.length !== keep.length) idx.settings.rules = keep;
+  if (n) { smartCache = null; console.info('removed', n, 'age-related labels'); }
+  return n;
+}
+/* ---------- environment checks (Safari specifics, v1.4.1) ---------- */
+const hasWasm = (() => { try { return typeof WebAssembly === 'object' && !!new WebAssembly.Module(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)); } catch (e) { return false; } })();
+let envCache = null, swReg = null;
+function swVersion() {
+  const c = navigator.serviceWorker && navigator.serviceWorker.controller; if (!c) return Promise.resolve(null);
+  return new Promise(res => { const ch = new MessageChannel(); const t = setTimeout(() => res('no reply (older service worker)'), 1500); ch.port1.onmessage = e => { clearTimeout(t); res(e.data && e.data.version); }; c.postMessage({ type: 'version' }, [ch.port2]); });
+}
+async function autoplayProbe() {          // can an unblessed, muted, inline video play here? (Safari Auto-Play setting / Low Power Mode)
+  let url = null; const v = document.createElement('video');
+  try {
+    url = URL.createObjectURL(await (await fetch('media/probe.mp4')).blob());
+    v.muted = true; v.playsInline = true; v.setAttribute('playsinline', ''); v.style.cssText = 'position:fixed;left:0;top:0;width:16px;height:16px;opacity:0.01;pointer-events:none'; document.body.appendChild(v);
+    v.src = url; await Thumbs.timed(v.play(), 3000, 'play'); return 'allowed';
+  } catch (e) { return e.name === 'NotAllowedError' ? 'blocked (NotAllowedError)' : 'failed: ' + String(e.message || e.name || e).slice(0, 80); }
+  finally { try { v.pause(); } catch (e) { } v.removeAttribute('src'); v.remove(); if (url) URL.revokeObjectURL(url); }
+}
+async function envFlags(force) {
+  if (envCache && !force) return envCache;
+  const f = { app: APP_VER, sw: SW_VER, ios: isIOS, standalone: navigator.standalone === true || matchMedia('(display-mode: standalone)').matches, wasm: hasWasm, webcodecs: Thumbs.hasWebCodecs(), opfs: !!(navigator.storage && navigator.storage.getDirectory) };
+  try { const e = await navigator.storage.estimate(); f.quota = e.quota || 0; f.usage = e.usage || 0; } catch (e) { f.quota = null; }
+  try { f.persisted = await navigator.storage.persisted(); } catch (e) { f.persisted = null; }
+  try { localStorage.setItem('_velvet', '1'); localStorage.removeItem('_velvet'); f.ls = true; } catch (e) { f.ls = false; }
+  f.swSupported = 'serviceWorker' in navigator; f.swActive = !!(navigator.serviceWorker && navigator.serviceWorker.controller); f.swVer = host ? 'n/a (Windows app)' : await swVersion();
+  f.autoplay = host ? 'n/a' : await autoplayProbe(); f.blessed = Thumbs.isBlessed();
+  f.lockdown = !hasWasm;                                  // Lockdown Mode switches WebAssembly off in Safari
+  f.limited = f.quota != null && f.quota > 0 && f.quota < 512 * 1024 ** 2;
+  f.privateLikely = !f.ls || (f.limited && isIOS);
+  envCache = f; return f;
+}
+function envWarnings(f) {
+  const w = [];
+  if (f.privateLikely || f.limited) w.push(['Storage is limited here', `This browser gives Velvet only ${bytes(f.quota || 0)}${!f.ls ? ' and blocks site storage' : ''}. That usually means Private Browsing, or Settings → Safari → <b>Block All Cookies</b>. Large imports may fail, and Private Browsing deletes everything when the tab closes. Use a normal Safari tab, or Add to Home Screen.`]);
+  if (f.lockdown) w.push(['WebAssembly is off (Lockdown Mode?)', 'On-device AI and People need WebAssembly, which Lockdown Mode turns off. Your gallery, previews and playback still work. To use AI here, exclude this site in Settings → Privacy & Security → Lockdown Mode → Configure Web Browsing.']);
+  if (/blocked/.test(f.autoplay || '') && !host) w.push(['Video auto-play is blocked', 'Safari is blocking muted video playback here (the site’s Auto-Play setting, or Low Power Mode). Velvet decodes video previews another way, or after your first tap. If a preview is still missing, tap <b>Regenerate previews</b> or set Safari → Settings for this website → Auto-Play → Allow All Auto-Play.']);
+  if (f.swSupported && !f.swActive && !host && location.protocol === 'https:') w.push(['Offline mode isn’t active yet', 'Velvet’s offline app cache isn’t running in this tab yet. Reload once. In Private Browsing it may never run.']);
+  if (f.swVer && f.swVer !== SW_VER && !host && f.swActive) w.push(['An older version is still cached', `The offline cache is ${esc(f.swVer)} but this is ${SW_VER}. Tap <b>Reload app files</b> under Profile → Data.`]);
+  return w;
+}
+async function renderEnvCard() {
+  const f = await envFlags(); if (view !== 'profile' || !$('#profileBody')) return;
+  const ver = $('#verInfo'); if (ver) ver.textContent = `${APP_VER} · ${host ? 'Windows app' : (f.swVer || 'no offline cache')}${f.standalone ? ' · Home Screen app' : ''}`;
+  const w = envWarnings(f), old = $('#envCard'); if (old) old.remove(); if (!w.length) return;
+  $('#profileBody').insertAdjacentHTML('afterbegin', `<div class="card env-card" id="envCard">${w.map(([t, d]) => `<div class="env-w">${IC.spark}<div><b>${t}</b><p>${d}</p></div></div>`).join('')}</div>`);
+}
+async function repairAppFiles() {
+  if (!(await confirmBox('Reload app files?', 'Velvet will clear its cached app code (not your photos, videos or AI models) and reload the latest version. You’ll need your passcode again.', 'Reload'))) return;
+  try { for (const r of (await navigator.serviceWorker.getRegistrations())) await r.unregister(); } catch (e) { }
+  try { for (const k of await caches.keys()) if (k !== 'velvet-ai-v1') await caches.delete(k); } catch (e) { }
+  location.reload();
+}
+// first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
+['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
+/* ---------- preview diagnostics (v1.4.1) ---------- */
+const SW_VER = 'velvet-v8';
+function pvProblems() {
+  if (!idx) return [];
+  return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
+}
+function pvSummary() {
+  const bad = pvProblems().length;
+  return bad ? `${bad} item${bad === 1 ? '' : 's'} without a working preview. Tap View to see why` : 'All previews OK. If one fails, the reason shows up here';
+}
+async function pvEnv() {
+  const v = document.createElement('video'), cp = t => v.canPlayType(t) || 'no';
+  const wc = Thumbs.hasWebCodecs();
+  const sup = async c => { if (!wc) return 'n/a'; try { return (await VideoDecoder.isConfigSupported({ codec: c, codedWidth: 1920, codedHeight: 1080 })).supported ? 'yes' : 'no'; } catch (e) { return 'err'; } };
+  return [
+    `Velvet ${APP_VER} (${host ? 'Windows app' : 'web'}, ${SW_VER})`,
+    `UA: ${navigator.userAgent}`,
+    `Standalone: ${navigator.standalone === true || matchMedia('(display-mode: standalone)').matches ? 'yes' : 'no'} · iOS: ${isIOS ? 'yes' : 'no'} · screen ${screen.width}x${screen.height}@${devicePixelRatio}`,
+    `canPlayType mp4/avc1: ${cp('video/mp4; codecs="avc1.640028"')} · mp4/hvc1: ${cp('video/mp4; codecs="hvc1.2.4.L153.B0"')} · quicktime: ${cp('video/quicktime')} · webm: ${cp('video/webm')}`,
+    `WebCodecs: ${wc ? 'yes' : 'no'} · decode avc1: ${await sup('avc1.640028')} · decode hvc1: ${await sup('hvc1.2.4.L153.B0')}`,
+    ...(await envFlags(true).then(f => [
+      `Service worker: ${f.swSupported ? (f.swActive ? 'active ' + (f.swVer || '?') : 'not controlling this page') : 'unsupported'} · autoplay (muted): ${f.autoplay} · gesture-unlocked video: ${f.blessed ? 'yes' : 'no'}`,
+      `Storage: quota ${f.quota == null ? '?' : bytes(f.quota)}, used ${bytes(f.usage || 0)}, persisted ${f.persisted}, localStorage ${f.ls ? 'ok' : 'BLOCKED'}, OPFS ${f.opfs ? 'yes' : 'no'}`,
+      `WebAssembly: ${f.wasm ? 'yes' : 'NO (Lockdown Mode?)'} · flags: ${[f.privateLikely && 'private/limited-storage', f.lockdown && 'lockdown', /blocked/.test(f.autoplay) && 'autoplay-blocked', f.swVer && f.swActive && f.swVer !== SW_VER && 'stale-sw'].filter(Boolean).join(', ') || 'none'}`,
+    ])),
+  ];
+}
+async function pvReport() {
+  const P = pvProblems(), lines = await pvEnv();
+  const vids = idx.items.filter(i => i.type === 'video').length, viaKey = idx.items.filter(i => i.pv && i.pv.ok && i.pv.via === 'keyframe').length;
+  lines.push(`Items: ${idx.items.length} (${vids} videos) · previews missing/broken: ${P.length} · made via keyframe fallback: ${viaKey}`, '');
+  for (const { it, n } of P.slice(0, 80)) {
+    const why = tileErrs.get(it.id) || (it.pv ? it.pv.why : 'no preview (imported before v1.4.1: run Regenerate previews to record the reason)');
+    lines.push(`#${n} ${it.type} .${it.ext || '?'} ${it.mime || '?'} ${it.codec || '-'}${it.pv && it.pv.cs ? ' [' + it.pv.cs + ']' : ''} ${bytes(it.size)} ${it.w || '?'}x${it.h || '?'} ${it.dur ? it.dur.toFixed(1) + 's' : ''}${it.vault ? ' (vault)' : ''}`);
+    lines.push(`   → ${why}`);
+  }
+  if (P.length > 80) lines.push(`… and ${P.length - 80} more`);
+  return lines.join('\n');
+}
+async function previewDiagnostics() {
+  const txt = await pvReport(), n = pvProblems().length;
+  await modal(`<h3>Preview diagnostics</h3><p>${n ? `${n} item${n === 1 ? '' : 's'} without a working preview. The report has no photos, videos or file names, only formats, sizes and error messages.` : 'Every item has a working preview. The report below shows what this browser supports.'}</p>
+    <textarea class="field pvrep" id="pvTxt" readonly rows="12" spellcheck="false"></textarea>
+    <div class="actions"><button class="btn btn-ghost" data-r="">Close</button>${n ? '<button class="btn btn-ghost" id="pvRegen">Regenerate previews</button>' : ''}<button class="btn btn-primary" id="pvCopy">Copy report</button></div>`, (m, close) => {
+    const ta = m.querySelector('#pvTxt'); ta.value = txt;
+    m.querySelector('#pvCopy').onclick = async () => {
+      let ok = false; try { await navigator.clipboard.writeText(txt); ok = true; } catch (e) { }
+      if (!ok) { ta.focus(); ta.select(); ta.setSelectionRange(0, txt.length); try { ok = document.execCommand('copy'); } catch (e) { } }
+      toast(ok ? 'Report copied' : 'Select the text and copy it');
+    };
+    const rg = m.querySelector('#pvRegen'); if (rg) rg.onclick = () => { close(); regenPreviews(); };
+  });
+}
 /* ---------- duplicates & similar ---------- */
 let dupState = null;
 $('#dupBack').onclick = () => nav('profile');
@@ -832,7 +979,7 @@ async function setPreviewFromPlayer() {
   try {
     if (!vid.videoWidth || vid.readyState < 2) throw new Error('not ready');
     const b = await Thumbs.frameFromVideo(vid);
-    await replaceThumb(it, b); it.thumbT = +vid.currentTime.toFixed(3); it.w = vid.videoWidth; it.h = vid.videoHeight; it.ar = it.w / it.h;
+    await replaceThumb(it, b); it.pv = { ok: true, via: 'set from player', at: Date.now() }; it.thumbT = +vid.currentTime.toFixed(3); it.w = vid.videoWidth; it.h = vid.videoHeight; it.ar = it.w / it.h;
     await save(); render(); flash('Preview set to ' + fmt(vid.currentTime));
   } catch (e) { console.warn('set preview', e); flash('Couldn’t capture this frame. Try again once the video is playing.'); }
 }
@@ -843,17 +990,21 @@ async function regenPreviews(opts = {}) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i]; progress(`Rebuilding previews · ${i + 1} of ${items.length}`, i / items.length);
     try {
-      if (it.size > LIMIT) { none++; continue; }
-      const b = await Store.readFile(it.id, it.chunks, it.mime); if (!Store.isUnlocked()) return;
-      const f = new File([b], it.name || it.title, { type: it.mime });
-      const th = await withTimeout(makeThumb(f, it.type, it.mime), 45000).catch(e => { console.warn('regen', it.name, e); return null; });
+      // big videos: read just the container index + a keyframe (decrypting only those chunks), never the whole file
+      const huge = it.type === 'video' && it.size > (window.__velvetHugeVideoBytes || (isIOS ? 150 * 1024 ** 2 : LIMIT));
+      if (it.size > LIMIT && it.type !== 'video') { none++; it.pv = { ok: false, at: Date.now(), why: `skipped: ${bytes(it.size)} is over this device’s ${bytes(LIMIT)} limit` }; continue; }
+      let f = null; const reader = Store.rangeReader(it.id, it.chunks, it.size);
+      if (!huge) { const b = await Store.readFile(it.id, it.chunks, it.mime); if (!Store.isUnlocked()) return; f = new File([b], it.name || it.title, { type: it.mime }); }
+      let thErr = null;
+      const th = await withTimeout(makeThumb(f, it.type, it.mime, { reader, name: it.name }), isIOS ? 90000 : 45000).catch(e => { thErr = e.message === 'timeout' ? new Error(`preview timed out after ${isIOS ? 90 : 45} s`) : e; console.warn('regen', it.name, e); return null; });
+      notePreview(it, th, thErr); f = null;
       if (th) { if (th.dur) it.dur = th.dur; if (th.codec) it.codec = th.codec; if (th.w && th.h && (th.blob || !it.thumb)) { it.w = th.w; it.h = th.h; it.ar = th.w / th.h; } }
       if (th && th.blob) { await replaceThumb(it, th.blob); if (th.t != null) it.thumbT = th.t; ok++; } else none++;
-    } catch (e) { console.warn('regen failed', it.name, e); none++; }
+    } catch (e) { console.warn('regen failed', it.name, e); none++; it.pv = { ok: false, at: Date.now(), why: 'read/decrypt failed: ' + String(e.message || e).slice(0, 200) }; }
     if (i % 10 === 9) await Store.saveIndex(idx);
   }
   await Store.saveIndex(idx); progress(null); render();
-  toast(`Rebuilt ${ok} preview${ok === 1 ? '' : 's'}` + (none ? ` · ${none} couldn’t be read on this device` : ''));
+  toast(`Rebuilt ${ok} preview${ok === 1 ? '' : 's'}` + (none ? ` · ${none} couldn’t be made. See Profile → Preview diagnostics` : ''), none ? 6000 : 3000);
 }
 async function getFull(it, onP) {
   let u = fulls.get(it.id); if (u) { fulls.delete(it.id); fulls.set(it.id, u); return u; }
@@ -1058,12 +1209,13 @@ function wake() { pl.classList.remove('idle'); clearTimeout(hideT); hideT = setT
 const b64of = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(blob); });
 const blobOf = (b64, type) => { const s = atob(b64), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new Blob([u], { type }); };
 const capLabel = t => t.replace(/^\w/, c => c.toUpperCase());
+const safeLabel = (l, k) => !l || AI.isBlockedTag(l.replace(/ \d+$/, '')) ? 'Scene ' + (k + 1) : l;
 let chap = { id: null, list: null, busy: false, urls: [] };
 function clearChapters() { chap.urls.forEach(u => URL.revokeObjectURL(u)); chap = { id: null, list: null, busy: false, urls: [] }; $('#chMarks').innerHTML = ''; $('#chStrip').innerHTML = ''; $('#chBadge').textContent = ''; pl.classList.remove('chap-open'); }
 async function loadChapters(it) {
   if (!it.chap || !it.chap.file) return null;
   try { const j = JSON.parse(await (await Store.readFile(it.chap.file.id, it.chap.file.chunks, 'application/json')).text());
-    return j.list.map(c => { const u = c.img ? URL.createObjectURL(blobOf(c.img, 'image/jpeg')) : ''; if (u) chap.urls.push(u); return { t: c.t, label: c.label, url: u }; });
+    return j.list.map((c, k) => { const u = c.img ? URL.createObjectURL(blobOf(c.img, 'image/jpeg')) : ''; if (u) chap.urls.push(u); return { t: c.t, label: safeLabel(c.label, k), url: u }; });
   } catch (e) { console.warn('chapters unreadable', e); return null; }
 }
 function chapAt(t) { const L = chap.list; if (!L) return -1; let k = -1; for (let i = 0; i < L.length; i++) if (L[i].t <= t + .05) k = i; return k; }
@@ -1095,7 +1247,7 @@ async function detectChapters(it, url, force) {
     const list = [];
     ch.forEach((c, k) => { const L = labels[k] || {}, prev = list[list.length - 1];
       if (prev && L.vec && prev.vec && AI.dot(L.vec, prev.vec) >= .93) return;          // AI sees the same scene: merge
-      list.push({ t: c.t, label: L.label ? capLabel(L.label) : null, blob: c.frame.blob, vec: L.vec }); });
+      list.push({ t: c.t, label: L.label && !AI.isBlockedTag(L.label) ? capLabel(L.label) : null, blob: c.frame.blob, vec: L.vec }); });
     list.forEach((c, k) => { if (!c.label) c.label = 'Scene ' + (k + 1); });
     const seen = {}; list.forEach(c => { const n = (seen[c.label] = (seen[c.label] || 0) + 1); if (n > 1) c.label += ' ' + n; });
     const json = { v: 1, dur: scan.dur, list: await Promise.all(list.map(async c => ({ t: c.t, label: c.label, img: await b64of(c.blob) }))) };
@@ -1285,20 +1437,36 @@ async function getSmart(force) {
   const albums = await Smart.smartAlbums(visible()); smartCache = { key: k, albums }; return albums;
 }
 const smartById = id => smartCache && smartCache.albums.find(a => a.id === id);
+// auto albums the user saved as a collection or hid (kept in the encrypted index, so also in backups)
+const smartHidden = () => (idx.settings.smartHidden = idx.settings.smartHidden || {});
+async function hideSmart(a, why = 'hidden', extra = {}) { smartHidden()[a.id] = { name: a.name, why, at: Date.now(), ...extra }; await save(); }
+async function hiddenAlbumsDialog() {
+  const H = smartHidden(), ids = Object.keys(H); if (!ids.length) { toast('No hidden auto albums'); return; }
+  await modal(`<h3>Hidden auto albums</h3><p>Auto albums you saved as a collection or hid. Show one again to bring it back to Collections.</p>
+    <div class="menu" id="hidList">${ids.map(id => `<button data-show="${esc(id)}">${IC.spark}<span>${esc(H[id].name || id)} <small style="color:var(--dim)">· ${H[id].why === 'saved' ? 'saved as a collection' : 'hidden'}</small></span></button>`).join('')}</div>
+    <div class="actions"><button class="btn btn-ghost" data-r="">Close</button><button class="btn btn-primary" id="hidAll">Show all</button></div>`, (m, close) => {
+    m.querySelectorAll('[data-show]').forEach(b => b.onclick = async () => { delete smartHidden()[b.dataset.show]; await save(); b.remove(); toast('Album shown again'); if (!Object.keys(smartHidden()).length) close(); });
+    m.querySelector('#hidAll').onclick = async () => { idx.settings.smartHidden = {}; await save(); close(); toast('All auto albums shown again'); };
+  });
+  if (view === 'profile') renderProfile(); else render();
+}
 const KINDL = { place: 'Places', theme: 'Themes', moment: 'Moments' };
 const smartCover = a => a.ids.map(itemById).filter(Boolean).sort((x, y) => AI.quality(y) - AI.quality(x))[0];
 async function renderSmartAlbums() {
   const el = $('#smartAlbums'); if (!el) return;
   if (!aiOn()) { el.innerHTML = ''; return; }
-  const al = await getSmart(); if (view !== 'collections') return;
+  const H = smartHidden(), al = (await getSmart()).filter(a => !H[a.id]); if (view !== 'collections') return;
   if (!al.length) { el.innerHTML = `<div class="smart-empty">${IC.spark}<span>Smart albums appear here once on-device AI has indexed a few photos.</span></div>`; return; }
   el.innerHTML = Object.entries(KINDL).map(([k, l]) => { const xs = al.filter(a => a.kind === k); if (!xs.length) return '';
     return `<div class="sub-h smart-h">${IC.spark}${l}</div><div class="smart-row">${xs.map((a, i) => { const cv = smartCover(a);
       return `<div class="col-card smart" data-smart="${esc(a.id)}" style="--fb:${fbFor(a.id)};--i:${i}" role="button" tabindex="0">${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="gloss"></div>
-        <span class="auto-chip">${IC.spark}Auto</span><div class="info"><div><h3>${esc(a.name)}</h3><p>${a.ids.length} items${a.sub ? ' · ' + esc(a.sub) : ''}</p></div></div></div>`; }).join('')}</div>`; }).join('') +
+        <span class="auto-chip">${IC.spark}Auto</span><div class="cmenu"><button class="iconbtn" data-hide="${esc(a.id)}" aria-label="Hide this album" title="Hide this album">${IC.more}</button></div><div class="info"><div><h3>${esc(a.name)}</h3><p>${a.ids.length} items${a.sub ? ' · ' + esc(a.sub) : ''}</p></div></div></div>`; }).join('')}</div>`; }).join('') +
     `<div class="sub-h smart-h mine">Your collections</div>`;
   hydrateCovers(el);
   el.querySelectorAll('[data-smart]').forEach(c => c.onclick = () => openCollection(c.dataset.smart));
+  el.querySelectorAll('[data-hide]').forEach(b => b.onclick = async e => { e.stopPropagation(); const a = smartById(b.dataset.hide); if (!a) return;
+    const r = await modal(`<h3>${esc(a.name)}</h3><div class="menu"><button data-r="hide">${IC.minus}Hide this album</button></div><p class="sub-note">Bring it back any time in Profile → On-device AI → Hidden auto albums.</p><div class="actions"><button class="btn btn-ghost" data-r="">Cancel</button></div>`);
+    if (r === 'hide') { await hideSmart(a); renderSmartAlbums(); toast(`“${a.name}” hidden`); } });
 }
 async function renderSmartCollection() {
   await getSmart(); const a = smartById(curCol); if (!a) { nav('collections'); return; }
@@ -1306,14 +1474,15 @@ async function renderSmartCollection() {
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
   h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div style="position:absolute;inset:0;background:linear-gradient(0deg,rgba(14,3,7,.9),transparent 70%)"></div>
     <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
-    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button></div>`;
+    <div class="hero-actions"><button class="btn btn-ghost btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-primary btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button><button class="btn btn-ghost btn-sm" id="smHide">${smartHidden()[a.id] ? 'Show in Collections' : 'Hide'}</button></div>`;
   hydrateCovers(h);
   $('#smReel').onclick = () => openReel(items, a.name);
   $('#smSave').onclick = async () => {
     const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
     const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
-    items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await save(); toast(`Saved “${c.name}”`); openCollection(c.id);
+    items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await hideSmart(a, 'saved', { col: c.id }); toast(`Saved “${c.name}”. The auto album is now hidden`); openCollection(c.id);
   };
+  $('#smHide').onclick = async () => { if (smartHidden()[a.id]) { delete smartHidden()[a.id]; await save(); toast('Shown in Collections again'); renderSmartCollection(); } else { await hideSmart(a); toast(`“${a.name}” hidden`); nav('collections'); } };
   const list = a.kind === 'moment' ? items.slice().sort((x, y) => Smart.timeOf(x) - Smart.timeOf(y)) : sortNew(items);
   renderGrid($('#colItems'), list, `<div class="empty"><b>Nothing here right now</b>Smart albums update as your library changes.</div>`);
 }
@@ -1480,9 +1649,18 @@ document.addEventListener('keydown', e => {
 
 /* ---------- boot ---------- */
 hydrateIcons();
-if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e));
+if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  const hadCtl = !!navigator.serviceWorker.controller; let reloading = false;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => { swReg = reg; reg.update().catch(() => { }); document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); }); }).catch(e => console.warn('SW', e));
+  // a new version took over: reload straight away while locked; when unlocked, offer it (reloading locks Velvet)
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadCtl || reloading) return;
+    if (!idx) { reloading = true; location.reload(); return; }
+    if (!$('#updBar')) { document.body.insertAdjacentHTML('beforeend', `<div class="upd-bar" id="updBar"><span>A new version of Velvet is ready</span><button class="btn btn-primary btn-sm" id="updGo">Reload</button></div>`); $('#updGo').onclick = () => { reloading = true; location.reload(); }; }
+  });
+}
 (async () => {
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
-  catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). Private browsing modes block it; open Velvet in a normal window.</p>`; }
+  catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

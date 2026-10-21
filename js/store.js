@@ -91,6 +91,29 @@ export async function readFile(id, n, type, onProgress) {
   }
   return new Blob(parts, { type: type || 'application/octet-stream' });
 }
+// Decrypt only the chunks covering [start, start+len) of a stored file (fixed CHUNK-size parts).
+// Lets previews read a video's index + one keyframe without decrypting the whole file into memory.
+export function rangeReader(id, n, size) {
+  const cache = new Map();
+  const chunk = async i => {
+    if (cache.has(i)) return cache.get(i);
+    const rec = await req(db.transaction('chunks').objectStore('chunks').get([id, i]));
+    if (!rec) throw new Error('Missing data for ' + id);
+    const u = new Uint8Array(await dec(dek, rec, id + ':' + i));
+    cache.set(i, u); if (cache.size > 3) cache.delete(cache.keys().next().value); return u;
+  };
+  return {
+    size,
+    async read(start, len) {
+      len = Math.max(0, Math.min(len, size - start)); const out = new Uint8Array(len); let w = 0;
+      for (let i = Math.floor(start / CHUNK); w < len && i < n; i++) {
+        const u = await chunk(i), s = Math.max(0, start + w - i * CHUNK), e = Math.min(u.length, start + len - i * CHUNK);
+        out.set(u.subarray(s, e), w); w += e - s;
+      }
+      return w === len ? out : out.subarray(0, w);
+    },
+  };
+}
 export async function deleteFile(id) {
   await open(); const t = db.transaction('chunks', 'readwrite');
   t.objectStore('chunks').delete(IDBKeyRange.bound([id, 0], [id, Infinity])); return txDone(t);

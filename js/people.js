@@ -4,6 +4,7 @@
 import * as Store from './store.js';
 import * as AI from './ai.js';
 import { scanVideo } from './scenes.js';
+import { once, frameReady, timed, takeVideo, releaseVideo } from './thumbs.js';
 export const MODEL = 'yunet2023mar+sface2021dec#1';
 export const MODEL_MB = 39;
 const DST = [[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366], [41.5493, 92.3655], [70.7299, 92.2041]]; // ArcFace 112x112 template
@@ -73,10 +74,33 @@ function alignedCrop(src, kps, into, off) {
   const d = x.getImageData(0, 0, 112, 112).data, n = 112 * 112;
   for (let i = 0, j = 0; j < n; i += 4, j++) { into[off + j] = d[i]; into[off + n + j] = d[i + 1]; into[off + 2 * n + j] = d[i + 2]; }   // RGB, 0..255
 }
-function avatarCrop(src, b, W, H) {      // small square JPEG of a face (only kept for video faces, which have no matching thumbnail)
-  const s = Math.max(b[2], b[3]) * 1.5, cx = b[0] + b[2] / 2, cy = b[1] + b[3] / 2, c = canvas(96, 96), x = c.getContext('2d');
-  x.drawImage(src, Math.max(0, cx - s / 2), Math.max(0, cy - s / 2), Math.min(s, W), Math.min(s, H), 0, 0, 96, 96);
-  return c.toDataURL('image/jpeg', .78).split(',')[1];
+/* Avatar framing (v1.4.1): the detector box is tight (brows to chin), so expand it ~2.1x around its centre with
+   extra headroom for forehead + hair, make it square in pixels, and clamp to the image by shifting (not shrinking)
+   so a round mask never cuts the face. `b` is normalised [x,y,w,h] in the displayed (EXIF-oriented / rotated) image,
+   `ar` = image width/height. Returns the normalised square crop [x,y,w,h]. */
+export const AVATAR_K = 2.1, AVATAR_UP = .14;
+export function avatarRect(b, ar) {
+  const W = ar >= 1 ? ar : 1, H = ar >= 1 ? 1 : 1 / ar;              // virtual pixels, long side = 1·ar
+  const bw = b[2] * W, bh = b[3] * H, side = Math.min(Math.max(bw, bh) * AVATAR_K, W, H);
+  const cx = (b[0] + b[2] / 2) * W, cy = (b[1] + b[3] / 2) * H - AVATAR_UP * bh;
+  const x = Math.max(0, Math.min(W - side, cx - side / 2)), y = Math.max(0, Math.min(H - side, cy - side / 2));
+  return [x / W, y / H, side / W, side / H];
+}
+export const AVATAR_PX = 128, CROP_V = 2;
+function avatarCrop(src, b, W, H) {      // square JPEG of a face (only kept for video faces, which have no matching thumbnail)
+  const r = avatarRect(b, W / H), c = canvas(AVATAR_PX, AVATAR_PX), x = c.getContext('2d'); x.imageSmoothingQuality = 'high';
+  x.drawImage(src, r[0] * W, r[1] * H, r[2] * W, r[3] * H, 0, 0, AVATAR_PX, AVATAR_PX);
+  return c.toDataURL('image/jpeg', .8).split(',')[1];
+}
+// how frontal a face is (1 = looking at the camera) from the 5 landmarks, and how sharp its region is
+function faceQuality(src, box, kps) {
+  const [lx, ly, rx, ry, nx] = kps, eye = Math.hypot(rx - lx, ry - ly) || 1, mid = (lx + rx) / 2;
+  const fr = +Math.max(0, 1 - Math.abs(nx - mid) / (eye * .5)).toFixed(3);
+  const n = 48, c = canvas(n, n), x = c.getContext('2d', { willReadFrequently: true });
+  x.drawImage(src, box[0], box[1], Math.max(1, box[2]), Math.max(1, box[3]), 0, 0, n, n);
+  const d = x.getImageData(0, 0, n, n).data, L = new Float32Array(n * n); for (let i = 0; i < n * n; i++) L[i] = .299 * d[i * 4] + .587 * d[i * 4 + 1] + .114 * d[i * 4 + 2];
+  let a = 0, a2 = 0, k = 0; for (let y = 1; y < n - 1; y++) for (let x2 = 1; x2 < n - 1; x2++) { const o = y * n + x2, v = 4 * L[o] - L[o - 1] - L[o + 1] - L[o - n] - L[o + n]; a += v; a2 += v * v; k++; }
+  return { fr, sh: +Math.max(0, a2 / k - (a / k) ** 2).toFixed(1) };
 }
 // one image -> faces [{b:[x,y,w,h] normalised, s, v, (c)}]
 export async function facesIn(src, W, H, { t = null, crop = false } = {}) {
@@ -87,9 +111,11 @@ export async function facesIn(src, W, H, { t = null, crop = false } = {}) {
   const sz = 3 * 112 * 112, buf = new Float32Array(fs.length * sz); fs.forEach((f, i) => alignedCrop(src, f.kps, buf, i * sz));
   const e = await AI.workerCall({ type: 'femb', data: buf, n: fs.length }, [buf.buffer]);
   return fs.map((f, i) => { const bx = f.box, o = { b: [bx[0] / W, bx[1] / H, bx[2] / W, bx[3] / H].map(x => +Math.max(0, Math.min(1, x)).toFixed(4)), s: +f.s.toFixed(3), v: e.vecs[i] };
-    if (t != null) o.t = +t.toFixed(2); if (crop) o.c = avatarCrop(src, bx, W, H); return o; });
+    Object.assign(o, faceQuality(src, bx, f.kps)); o.px = Math.round(Math.max(bx[2], bx[3]));
+    if (t != null) o.t = +t.toFixed(2); if (crop) { o.c = avatarCrop(src, o.b, W, H); o.cv = CROP_V; } return o; });
 }
-async function bitmapOf(blob) { return createImageBitmap(blob); }
+// EXIF orientation applied explicitly so boxes match the (oriented) thumbnails and on-screen photos
+async function bitmapOf(blob) { try { return await createImageBitmap(blob, { imageOrientation: 'from-image' }); } catch (e) { return createImageBitmap(blob); } }
 async function facesOfItem(it, ctx) {
   if (it.type === 'photo') {
     let bmp = null;
@@ -119,6 +145,7 @@ export async function indexFaces(ctx) {
   const { idx } = ctx;
   try {
     await open(idx);
+    AI.setBusy(true); await refreshFaces(ctx);
     const todo = idx.items.filter(i => !data.items[i.id]); let done = 0, dirty = 0; const t0 = performance.now();
     if (!todo.length) { if (recluster()) await persist(idx); return; }
     ctx.onProgress && ctx.onProgress({ phase: 'loading', done, total: todo.length }); AI.setBusy(true);
@@ -129,7 +156,7 @@ export async function indexFaces(ctx) {
       if (!idx.items.includes(it) || !data) continue;
       try {
         const fs = await facesOfItem(it, ctx); if (!data) break;
-        data.items[it.id] = { f: fs.map(f => { const q = quant(f.v), o = { b: f.b, s: f.s, e: q.e, q: q.q }; if (f.t != null) o.t = f.t; if (f.c) o.c = f.c; return o; }) };
+        data.items[it.id] = { f: fs.map(f => { const q = quant(f.v), o = { b: f.b, s: f.s, e: q.e, q: q.q, fr: f.fr, sh: f.sh, px: f.px }; if (f.t != null) o.t = f.t; if (f.c) { o.c = f.c; o.cv = f.cv; } return o; }) };
         fs.forEach((f, n) => vecs.set(it.id + ':' + n, normed(f.v)));
       } catch (e) { console.warn('faces failed', it.name, e); if (data) data.items[it.id] = { f: [], err: String(e.message || e).slice(0, 80) }; }
       done++; dirty++;
@@ -141,9 +168,62 @@ export async function indexFaces(ctx) {
   } finally { running = false; AI.setBusy(false); }
 }
 
+/* v1.4.1: faces indexed by v1.4.0 have tight video crops and no quality info. Upgrade them in place from the
+   stored boxes (re-detect only to recover landmarks; no re-embedding, so People/names are untouched). */
+const needsRefresh = e => e && e.f && e.f.length && e.f.some(f => f.fr == null || (f.c && f.cv !== CROP_V));
+const iou = (a, b) => { const x = Math.max(a[0], b[0]), y = Math.max(a[1], b[1]), r = Math.min(a[0] + a[2], b[0] + b[2]), u = Math.min(a[1] + a[3], b[1] + b[3]); const i = Math.max(0, r - x) * Math.max(0, u - y); return i / (a[2] * a[3] + b[2] * b[3] - i || 1); };
+async function upgradeFrom(src, W, H, faces, crop) {
+  const { data: inp, k } = detInput(src, W, H);
+  const r = await AI.workerCall({ type: 'fdet', data: inp, thr: .5 }, [inp.buffer]);
+  const det = r.faces.map(f => ({ box: f.box.map(v => v / k), kps: f.kps.map(v => v / k) }));
+  for (const f of faces) {
+    const bpx = [f.b[0] * W, f.b[1] * H, f.b[2] * W, f.b[3] * H]; let best = null, bi = .3;
+    for (const d of det) { const o = iou(bpx, d.box); if (o > bi) { bi = o; best = d; } }
+    Object.assign(f, best ? faceQuality(src, best.box, best.kps) : { fr: .5, sh: 0 }); f.px = Math.round(Math.max(bpx[2], bpx[3]));
+    if (crop) { f.c = avatarCrop(src, f.b, W, H); f.cv = CROP_V; }
+  }
+}
+async function videoFrames(blob, times) {
+  const url = URL.createObjectURL(blob), v = takeVideo(), out = new Map();
+  try {
+    v.src = url; await once(v, 'loadedmetadata', 20000); if (v.readyState < 2) await once(v, 'loadeddata', 12000).catch(() => { });
+    const W = v.videoWidth, H = v.videoHeight, kk = Math.min(1, 960 / Math.max(W, H));
+    for (const t of times) {
+      v.currentTime = Math.max(0, Math.min(t, (v.duration || t) - .05)); await once(v, 'seeked', 6000).catch(() => { }); await frameReady(v, 600);
+      const c = canvas(Math.round(W * kk), Math.round(H * kk)); c.getContext('2d').drawImage(v, 0, 0, c.width, c.height); out.set(t, c);
+    }
+  } finally { releaseVideo(v); URL.revokeObjectURL(url); }
+  return out;
+}
+export async function refreshFaces(ctx) {
+  const ids = Object.keys(data.items).filter(id => needsRefresh(data.items[id])); if (!ids.length) return 0;
+  await AI.workerCall({ type: 'finit' }); let n = 0;
+  for (const id of ids) {
+    if (stopFlag || !Store.isUnlocked() || !data) break;
+    const it = ctx.idx.items.find(i => i.id === id), e = data.items[id]; if (!it) continue;
+    try {
+      if (it.type === 'photo') {
+        const tb = await ctx.thumbBlob(it); if (tb) { const bmp = await bitmapOf(tb); try { await upgradeFrom(bmp, bmp.width, bmp.height, e.f, false); } finally { bmp.close && bmp.close(); } }
+      } else {
+        const byT = new Map(); e.f.forEach(f => { const t = f.t || 0; if (!byT.has(t)) byT.set(t, []); byT.get(t).push(f); });
+        let frames = null;
+        if (it.size <= ctx.maxVideoBytes) frames = await videoFrames(await ctx.fileBlob(it), [...byT.keys()]).catch(() => null);
+        for (const [t, fs] of byT) {
+          const c = frames && frames.get(t);
+          if (c) await upgradeFrom(c, c.width, c.height, fs, true);
+          else fs.forEach(f => { if (f.fr == null) { f.fr = .5; f.sh = 0; } if (f.c) f.cv = CROP_V; f.old = 1; });   // can't re-decode here: keep the old crop
+        }
+      }
+    } catch (err) { console.warn('face refresh', it.name, err); e.f.forEach(f => { if (f.fr == null) { f.fr = .5; f.sh = 0; } if (f.c) f.cv = CROP_V; }); }
+    if (++n % 10 === 0) { await persist(ctx.idx); ctx.onBatch && ctx.onBatch(); }
+  }
+  await persist(ctx.idx); ctx.onBatch && ctx.onBatch(); return n;
+}
+
 /* ---------- grouping ---------- */
 export const itemOf = k => k.slice(0, k.lastIndexOf(':'));
-export function faceInfo(k) { const id = itemOf(k), n = +k.slice(k.lastIndexOf(':') + 1), e = data && data.items[id]; const f = e && e.f && e.f[n]; return f ? { key: k, itemId: id, b: f.b, s: f.s, t: f.t, c: f.c } : null; }
+export function faceInfo(k) { const id = itemOf(k), n = +k.slice(k.lastIndexOf(':') + 1), e = data && data.items[id]; const f = e && e.f && e.f[n]; return f ? { key: k, itemId: id, b: f.b, s: f.s, t: f.t, c: f.c, cv: f.cv, fr: f.fr, sh: f.sh, px: f.px } : null; }
+export const _raw = () => data;   // tests
 const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 // assign new faces to known people, group the rest; returns true if anything changed
 export function recluster() {
@@ -178,7 +258,13 @@ export function facesOfItemId(itemId) { const e = data && data.items[itemId]; re
 // best face to show for a person: big, confident, and (if given) from an item the caller may show
 export function cover(p, ok = () => true) {
   let best = null, bs = -1;
-  for (const k of p.faces) { const f = faceInfo(k); if (!f || !ok(f.itemId)) continue; const s = f.s * Math.sqrt(f.b[2] * f.b[3]) * (f.c ? .8 : 1); if (s > bs) { bs = s; best = f; } }
+  // the person's largest, most frontal, sharpest face (detector confidence as a tie-breaker)
+  for (const k of p.faces) {
+    const f = faceInfo(k); if (!f || !ok(f.itemId)) continue;
+    const size = Math.min(1, (f.px || 120) / 160), fr = f.fr == null ? .7 : f.fr, sh = f.sh == null ? .6 : Math.min(1, Math.log1p(f.sh) / 7);
+    const s = (.35 + .65 * size) * (.25 + .75 * fr) * (.5 + .5 * sh) * (.7 + .3 * f.s) * (f.old ? .7 : 1);
+    if (s > bs) { bs = s; best = f; }
+  }
   return best;
 }
 export const displayName = (p, i) => p.name || `Person ${i + 1}`;

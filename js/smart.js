@@ -19,7 +19,7 @@ export async function smartAlbums(items, { min = 3, maxEach = 10, gapH = 12 } = 
   if (AI.hasIndex()) {
     const voc = await AI.vocabInfo(), group = new Map(voc.tags.map(t => [t[0], t[1]]));
     const by = new Map();
-    for (const it of items) for (const t of tagsOf(it)) if (group.has(t) && !SKIP.has(t)) { if (!by.has(t)) by.set(t, new Set()); by.get(t).add(it.id); }
+    for (const it of items) for (const t of tagsOf(it)) if (group.has(t) && !SKIP.has(t) && !AI.isBlockedTag(t)) { if (!by.has(t)) by.set(t, new Set()); by.get(t).add(it.id); }
     const vec = new Map(); for (const it of items) { const v = AI.itemVec(it.id); if (v) vec.set(it.id, v); }
     const cands = [];
     for (const [t, set] of by) {
