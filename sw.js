@@ -1,13 +1,13 @@
 // Velvet service worker: caches the app shell so Velvet opens fully offline.
 // It never sees your photos/videos (those live encrypted in IndexedDB and are decrypted in the page).
-const VERSION = 'velvet-v11';
+const VERSION = 'velvet-v12';
 // AI model + runtime (~93 MB) live in their own cache so app updates don't re-download them
 const MODELS = 'velvet-ai-v1';
 const isModel = p => p.includes('/models/') || p.includes('/js/vendor/transformers/');
 // v1.7 add-ons (video tools, speech search, text in photos): fetched only when first used, then kept for offline use
 const ADDONS = 'velvet-addons-v1';
 const isAddon = p => p.includes('/addons/') && !p.endsWith('/addons/manifest.json');
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'css/ios.css', 'js/app.js', 'js/ios.js', 'js/ctags.js', 'js/dedupe.js', 'js/addons.js', 'js/textidx.js', 'js/vtools.js', 'js/ffmpeg-worker.js', 'js/speech.js', 'js/speech-worker.js', 'js/ocr.js', 'addons/manifest.json', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/people.js', 'media/probe.mp4', 'js/ai.js', 'js/ai-worker.js',
+const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'css/ios.css', 'js/app.js', 'js/ios.js', 'js/ctags.js', 'js/dedupe.js', 'js/addons.js', 'js/textidx.js', 'js/vtools.js', 'js/ffmpeg-worker.js', 'js/speech.js', 'js/speech-worker.js', 'js/ocr.js', 'js/imgtools.js', 'js/imgai-worker.js', 'js/caption.js', 'js/caption-worker.js', 'addons/manifest.json', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/people.js', 'media/probe.mp4', 'js/ai.js', 'js/ai-worker.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/favicon.png',
   'fonts/GreatVibes-normal-400.woff2', 'fonts/Inter-normal-300.woff2', 'fonts/Inter-normal-400.woff2', 'fonts/Inter-normal-500.woff2', 'fonts/Inter-normal-600.woff2',
   'fonts/PlayfairDisplay-italic-400.woff2', 'fonts/PlayfairDisplay-italic-500.woff2', 'fonts/PlayfairDisplay-normal-500.woff2'];

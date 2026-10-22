@@ -13,6 +13,8 @@ import * as TI from './textidx.js';
 import * as VT from './vtools.js';
 import * as Speech from './speech.js';
 import * as OCR from './ocr.js';
+import * as IT from './imgtools.js';
+import * as Cap from './caption.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -77,6 +79,9 @@ Object.assign(IC, {
   cc: S('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10.6 10.3a2.3 2.3 0 1 0 0 3.4M17.1 10.3a2.3 2.3 0 1 0 0 3.4"/>'),
   scissors: S('<circle cx="6" cy="7" r="2.6"/><circle cx="6" cy="17" r="2.6"/><path d="M8.2 8.6L20 17M8.2 15.4L20 7"/>'),
   convert: S('<path d="M4 8h12l-3-3M20 16H8l3 3"/>'),
+  upscale: S('<path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/>'),
+  cutout: S('<path d="M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z"/><path d="M5 19.5h14" stroke-dasharray="2 2.4"/>'),
+  quote: S('<path d="M5 6h14M5 11h14M5 16h9"/><path d="M17.5 15.5l2 2 3-3.5"/>'),
   copy: S('<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/>'),
   mic: S('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
 });
@@ -302,7 +307,7 @@ function lockNow() { hashTok++; try { closeReel(); } catch (e) { } if (typeof ru
   flushDeletes(); closeCx(); $('#toast').classList.remove('show'); toastUndo = null;
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
-  txRun = 0; txProg = null; txPri = null; VT.cancel(); Speech.shutdown(); OCR.shutdown(); TI.close(); subs = null;
+  txRun = 0; txProg = null; txPri = null; VT.cancel(); Speech.shutdown(); OCR.shutdown(); Cap.shutdown(); IT.cancel(); TI.close(); subs = null;
   AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
   Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
@@ -568,6 +573,8 @@ function renderSearch() {
     if (q) sug = People.find(q).filter(p => !p.hidden && People.itemsOf(p, visibleId).length).slice(0, 3).map(p => ({ k: 'person', v: p.name, id: p.id })).concat(sug); }
   if (!pOn) $('#searchPeople').innerHTML = ''; else if (!q) renderPeopleRow('#searchPeople'); else $('#searchPeople').innerHTML = '';
   $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span class="hint-line">No suggestions yet</span>';
+  const qw = q ? TI.words(q) : [], capSc = id => qw.length ? TI.capScore(id, qw) : 0;
+  const tagOK = i => [...activeTags].every(t => t === '__fav' ? i.fav : t === '__photo' ? i.type === 'photo' : t === '__video' ? i.type === 'video' : hasTag(i, t));
   const res = visible().filter(i => {
     const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + [...TV.ai(i), ...TV.custom(i)].join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase() + TI.textOf(i.id);
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
@@ -578,22 +585,25 @@ function renderSearch() {
     return true;
   });
   renderSaid(q);
-  $('#resH').textContent = (q || activeTags.size) ? `Results · ${res.length}` : `Everything · ${res.length}`;
-  renderGrid($('#results'), sortNew(res), emptyHTML('search', q || activeTags.size ? 'No results' : 'Nothing to search yet', q || activeTags.size ? 'Try another word, or clear a tag.' : 'Import photos and videos, then find them here by name, tag, place or person.'));
+  // v1.8: search descriptions. Items whose description matches most of the words join the results, and matches rank higher
+  const lit = new Set(res.map(i => i.id)), capX = q && TI.isOpen('cap') && qw.length ? visible().filter(i => !lit.has(i.id) && tagOK(i) && capSc(i.id) >= .6).sort((a, b) => capSc(b.id) - capSc(a.id)) : [];
+  const base = (qw.length ? sortNew(res).sort((a, b) => capSc(b.id) - capSc(a.id)) : sortNew(res)).concat(capX), capPill = n => n ? ` <span class="ai-pill">${IC.quote}${n} by description</span>` : '';
+  $('#resH').innerHTML = (q || activeTags.size) ? `Results · ${base.length}${capPill(capX.length)}` : `Everything · ${res.length}`; hydrateIcons($('#resH'));
+  renderGrid($('#results'), base, emptyHTML('search', q || activeTags.size ? 'No results' : 'Nothing to search yet', q || activeTags.size ? 'Try another word, or clear a tag.' : 'Import photos and videos, then find them here by name, tag, place or person.'));
   const tok = ++smartTok;
   if (q.length >= 3 && aiOn() && AI.hasIndex()) {
-    const ids = visible().filter(i => [...activeTags].every(t => t === '__fav' ? i.fav : t === '__photo' ? i.type === 'photo' : t === '__video' ? i.type === 'video' : hasTag(i, t))).map(i => i.id);
-    $('#resH').textContent = `Results · ${res.length} · searching smartly…`;
+    const ids = visible().filter(tagOK).map(i => i.id);
+    $('#resH').innerHTML = `Results · ${base.length}${capPill(capX.length)} · searching smartly…`; hydrateIcons($('#resH'));
     setTimeout(() => { if (tok !== smartTok) return; AI.search(q, ids).then(hits => {
       if (tok !== smartTok || !idx) return;
-      const seen = new Set(res.map(i => i.id)), rank = new Map(hits.map(([id, sc]) => [id, sc]));
-      const textHits = res.slice().sort((a, b) => (rank.get(b.id) || 0) - (rank.get(a.id) || 0));
-      const extra = hits.filter(([id]) => !seen.has(id)).map(([id]) => itemById(id)).filter(Boolean);
+      const seen = new Set(base.map(i => i.id)), rank = new Map(hits.map(([id, sc]) => [id, sc])), score = id => (rank.get(id) || 0) + .06 * capSc(id);   // CLIP similarity + description match
+      const textHits = base.slice().sort((a, b) => score(b.id) - score(a.id));
+      const extra = hits.filter(([id]) => !seen.has(id)).map(([id]) => itemById(id)).filter(Boolean).sort((a, b) => score(b.id) - score(a.id));
       const all = textHits.concat(extra);
-      $('#resH').innerHTML = `Results · ${all.length}${extra.length ? ` <span class="ai-pill">${IC.spark}${extra.length} smart match${extra.length > 1 ? 'es' : ''}</span>` : ''}`;
+      $('#resH').innerHTML = `Results · ${all.length}${capPill(capX.length)}${extra.length ? ` <span class="ai-pill">${IC.spark}${extra.length} smart match${extra.length > 1 ? 'es' : ''}</span>` : ''}`;
       renderGrid($('#results'), all, emptyHTML('search', 'No results', 'Try another word, or clear a tag.'));
       hydrateIcons($('#resH'));
-    }).catch(e => { if (tok === smartTok) { console.warn('smart search', e); $('#resH').textContent = `Results · ${res.length}`; } }); }, 250);
+    }).catch(e => { if (tok === smartTok) { console.warn('smart search', e); $('#resH').innerHTML = `Results · ${base.length}${capPill(capX.length)}`; hydrateIcons($('#resH')); } }); }, 250);
   }
 }
 // v1.7: "Said in videos": transcript matches that open the player at the moment it's said
@@ -664,6 +674,8 @@ async function renderProfile() {
     <h4 class="gh">Smart features · on this device</h4>${aiCard()}
     ${GROUP('Videos', [ROW({ ic: 'chap', t: 'Find chapters automatically', d: 'Marks scene changes when you open a video', right: SW('autoChapters', s.autoChapters !== false, 'Find chapters automatically') }),
       ROW({ ic: 'convert', c: '#C2185B', t: 'Video tools', d: 'Convert to MP4, compress or trim. Open a video, then ••• → Convert, compress or trim', did: 'vtStatus' })])}
+    ${GROUP('Photos', [ROW({ ic: 'upscale', c: '#7A4FD1', t: 'Upscale', d: 'Make a photo 2× or 4× larger and sharper. Open a photo, then ••• → Upscale' }),
+      ROW({ ic: 'cutout', c: '#C47A2C', t: 'Remove background', d: 'Cut out the subject: transparent, a color, or a blurred background. Open a photo, then ••• → Remove background' })])}
     ${addonsGroup()}
     ${GROUP('Backup', [
       ROW({ ic: 'download', c: '#2E9E6B', t: 'Back up now', d: 'Saves one encrypted .velvet file. Restore it on any device with your passcode', id: 'bkBtn', tap: 1 }),
@@ -734,7 +746,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.7.0';
+const APP_VER = '1.8.0';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -902,6 +914,7 @@ function aiCard() {
     ${ROW({ ic: 'spark', t: 'On-device AI', d: 'Smart search, auto albums and a duplicate finder. Runs only on this device; nothing is uploaded', right: `<button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button>` })}
     ${ROW({ ic: 'mic', c: '#3B7FD1', t: 'Search what’s said in videos', d: txDesc('speech'), did: 'spStatus', right: `<button class="switch" role="switch" id="spSw" aria-checked="${speechOn()}" aria-label="Search what’s said in videos"></button>` })}
     ${ROW({ ic: 'text', c: '#2E9E6B', t: 'Text in photos', d: txDesc('ocr'), did: 'ocStatus', right: `<button class="switch" role="switch" id="ocSw" aria-checked="${ocrOn()}" aria-label="Text in photos"></button>` })}
+    ${ROW({ ic: 'quote', c: '#1F8A9E', t: 'Search descriptions', d: txDesc('cap'), did: 'cpStatus', right: `<button class="switch" role="switch" id="cpSw" aria-checked="${capOn()}" aria-label="Search descriptions"></button>` })}
     ${on ? `${ROW({ ic: 'bolt', c: '#C47A2C', t: 'Indexing', d: aiStatusText(), did: 'aiStatus', right: `<button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button>` })}
     ${ROW({ ic: 'image', c: '#3B7FD1', t: 'Duplicates & look-alikes', d: 'Review them side by side and keep the best', id: 'aiDup', tap: 1 })}
     ${ROW({ ic: 'star', c: '#D4A017', t: 'Best shots', d: 'Keep the best of each burst, tuck the rest away', id: 'aiBest', tap: 1 })}
@@ -1114,7 +1127,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v11';
+const SW_VER = 'velvet-v12';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -1271,7 +1284,7 @@ async function deleteItems(ids, opt = {}) {
     idx.items = idx.items.filter(x => x !== it); idx.collections.forEach(c => { if (c.cover === id) { c.cover = null; covers.push([c, id]); } });
   }
   AI.forget(ids); if (aiOn()) await AI.persist(idx).catch(() => { });
-  TI.forget(ids); for (const k of ['speech', 'ocr']) if (TI.isOpen(k) && idx.settings[k] && idx.settings[k].file) await TI.persist(idx, k).catch(() => { });
+  TI.forget(ids); for (const k of ['speech', 'ocr', 'cap']) if (TI.isOpen(k) && idx.settings[k] && idx.settings[k].file) await TI.persist(idx, k).catch(() => { });
   if (People.isOpen()) { People.forget(ids); await People.persist(idx).catch(() => { }); }
   await save(); render(); UI.haptic('heavy');
   const batch = gone.map(g => g.it); pendingDel.push(...batch); clearTimeout(delT); delT = setTimeout(flushDeletes, 7000);
@@ -1309,12 +1322,14 @@ async function itemSheet(it) {
     ${ctT.length ? `<span class="lbl">Your AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· tap × if it’s wrong. The tag learns from it</small></span><div class="taged ai" id="tCT">${ctT.map(t => `<span class="tag ai" data-ctw="${t.id}">${IC.spark}${esc(t.name)}<button data-ctno="${t.id}" aria-label="Not ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}
     ${aiT.length ? `<span class="lbl">AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· suggested on this device. Tap ✓ to keep or × to remove</small></span><div class="taged ai" id="tAI"></div>` : ''}
     ${textFoundHTML(it)}
+    ${descHTML(it)}
     <span class="lbl">Collections</span><div class="clist">${idx.collections.map(c => `<label><input type="checkbox" value="${c.id}" ${it.cols.includes(c.id) ? 'checked' : ''}>${esc(c.name)}${c.cover === it.id ? ' <small style="color:var(--mag2)">· cover</small>' : ''}</label>`).join('') || '<span style="color:var(--dim);font-size:13px">No collections yet. Create one in Collections.</span>'}</div>
     <div class="menu" style="margin-top:14px">
       <button data-a="fav">${IC.heart}${it.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
       ${it.cols.length ? `<button data-a="cover">${IC.image}Use as cover of its collection${it.cols.length > 1 ? 's' : ''}</button>` : ''}
       <button data-a="vault">${IC.vault}${it.vault ? 'Move back to Library' : 'Move to Vault'}</button>
       ${it.type === 'video' ? `<button data-a="vtools">${IC.convert}Convert, compress or trim…</button>` : ''}
+      ${it.type === 'photo' ? `<button data-a="upscale">${IC.upscale}Upscale…</button><button data-a="bgremove">${IC.cutout}Remove background…</button>` : ''}
       <button data-a="export">${IC.download}Save a decrypted copy…</button>
       <button class="danger" data-a="delete">${IC.trash}Delete</button></div>
     <div class="actions"><button class="btn btn-primary" data-ok>Done</button></div>`, (m, close) => {
@@ -1330,7 +1345,7 @@ async function itemSheet(it) {
     drawAI(); if (aiBox) aiBox.addEventListener('click', e => { const ok = e.target.closest("[data-aiok]"), no = e.target.closest("[data-aino]");
       if (ok) { const t0 = aiT.splice(+ok.dataset.aiok, 1)[0], t = TV.show(t0) || t0; aiRej.push(t0); if (!tags.includes(t)) tags.push(t); draw(); drawAI(); }
       if (no) { const t = aiT.splice(+no.dataset.aino, 1)[0]; aiRej.push(t); drawAI(); } });
-    const collect = () => { const inp = box.querySelector('#tIn'); if (inp && inp.value.trim()) { const v = inp.value.trim().toLowerCase(); if (!tags.includes(v)) tags.push(v); } return { title: m.querySelector('#tTitle').value.trim() || it.title, cols: Array.from(m.querySelectorAll('.clist input:checked')).map(i => i.value) }; };
+    const collect = () => { const inp = box.querySelector('#tIn'); if (inp && inp.value.trim()) { const v = inp.value.trim().toLowerCase(); if (!tags.includes(v)) tags.push(v); } const de = m.querySelector('#tDesc'); return { title: m.querySelector('#tTitle').value.trim() || it.title, cols: Array.from(m.querySelectorAll('.clist input:checked')).map(i => i.value), desc: de ? de.value : undefined }; };
     m.querySelector('[data-ok]').onclick = () => close({ a: 'done', ...collect() });
     m.querySelectorAll('[data-a]').forEach(b => b.onclick = () => close({ a: b.dataset.a, ...collect() }));
   });
@@ -1338,11 +1353,17 @@ async function itemSheet(it) {
   it.title = res.title; it.tags = tags; it.cols = res.cols; if (it.aiTags) { it.aiTags = aiT.filter(t => !tags.includes(t)).concat(aiHid); it.aiRej = aiRej; }
   if (ctNo.length) { ctNo.forEach(cid => { const t = ctById(cid); if (t) CT.confirm(t, it.id, false); }); it.ct = (it.ct || []).filter(x => !ctNo.includes(x)); bumpCT(); toast(ctNo.length > 1 ? 'Tags updated. They’ll learn from this' : `Got it: not “${ctById(ctNo[0]).name}”`); }
   await save(); applyRules({ ids: [it.id] });
+  if (res.desc !== undefined && TI.isOpen('cap')) {       // v1.8: the user edited the description (cleaned like captions, then encrypted)
+    const cur = (TI.get('cap', it.id) || {}).text || '', nv = res.desc.replace(/\s+/g, ' ').trim();
+    if (nv !== cur) { const c = Cap.clean(nv); TI.set('cap', it.id, { at: Date.now(), text: c.text, ed: 1 }); await TI.persist(idx, 'cap').catch(e => console.warn('description save', e));
+      if (c.changed) toast('Velvet doesn’t use age-related words in descriptions, so they were taken out', 4500); }
+  }
   if (res.a === 'fav') toggleFav(it);
   else if (res.a === 'cover') { it.cols.forEach(cid => { const c = colById(cid); if (c) c.cover = it.id; }); await save(); toast('Cover updated'); }
   else if (res.a === 'vault') { closeLightbox(); closePlayer(); setVault([it.id], !it.vault); return; }
   else if (res.a === 'export') exportItem(it);
   else if (res.a === 'vtools') { vid.pause(); videoTools(it); }
+  else if (res.a === 'upscale' || res.a === 'bgremove') { photoTools(it, res.a); return; }
   else if (res.a === 'delete') { if (await deleteItems([it.id])) { closeLightbox(); closePlayer(); } return; }
   render(); if (lb.classList.contains('open')) { $('#lbTitle').textContent = it.title; $('#lbTags').innerHTML = it.tags.map(t => `<span>#${esc(t)}</span>`).join(''); }
   if (curVid === it) $('#plTitle').textContent = it.title;
@@ -1778,6 +1799,9 @@ async function saveReelItem(blob, r, dur, w, h) {
 /* ---------- v1.7 add-ons: video tools, speech search, text in photos (all on this device) ---------- */
 const speechOn = () => !!(idx && idx.settings.speech && idx.settings.speech.on);
 const ocrOn = () => !!(idx && idx.settings.ocr && idx.settings.ocr.on);
+const capOn = () => !!(idx && idx.settings.cap && idx.settings.cap.on);
+const kindOn = k => k === 'speech' ? speechOn() : k === 'ocr' ? ocrOn() : capOn();
+const AK = { speech: 'speech', ocr: 'ocr', cap: 'caption' }, TXN = { speech: 'Search what’s said in videos', ocr: 'Text in photos', cap: 'Search descriptions' };
 const waitVisible = () => !document.hidden ? Promise.resolve() : new Promise(r => { const f = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', f); r(); } }; document.addEventListener('visibilitychange', f); });
 async function copyText(t) {
   if (!t) return;
@@ -1793,24 +1817,26 @@ function textFoundHTML(it) {
 }
 // sizes per add-on, filled in after the (small) add-on list loads
 const addonSt = {};
-async function refreshAddonSt() { for (const k of ['video', 'speech', 'ocr']) { try { addonSt[k] = await Addons.status(k); } catch (e) { addonSt[k] = null; } } }
+async function refreshAddonSt() { for (const k of ['video', 'speech', 'ocr', 'upscale', 'bgremove', 'caption']) { try { addonSt[k] = await Addons.status(k); } catch (e) { addonSt[k] = null; } } }
 const sizeNote = k => { const a = addonSt[k]; if (!a) return ''; return a.builtIn ? 'built into the app' : a.missing ? `${bytes(a.missing)} one-time download` : 'downloaded, works offline'; };
 function txDesc(k) {
-  const base = k === 'speech' ? 'Find videos by what’s said and turn on subtitles. Listens only on this device' : 'Find photos and screenshots by the words in them. Reads only on this device';
-  const on = k === 'speech' ? speechOn() : ocrOn(); if (!on) { const n = sizeNote(k); return base + (n ? ' · ' + n : ''); }
+  const base = k === 'speech' ? 'Find videos by what’s said and turn on subtitles. Listens only on this device' : k === 'ocr' ? 'Find photos and screenshots by the words in them. Reads only on this device'
+    : 'Writes a short description of each photo and video so Search finds “red bicycle” or “cup on a table”. Made only on this device';
+  const on = kindOn(k); if (!on) { const n = sizeNote(AK[k]); return base + (n ? ' · ' + n : ''); }
   return txStatus(k);
 }
 function txStatus(k) {
-  const want = textTargets(k), done = TI.count(k, want.map(i => i.id)), what = k === 'speech' ? 'videos' : 'photos';
+  const want = textTargets(k), done = TI.count(k, want.map(i => i.id)), what = k === 'speech' ? 'videos' : k === 'ocr' ? 'photos' : 'photos and videos';
   const p = txProg && txProg.kind === k ? txProg : null;
   if (txProg && txProg.phase === 'paused') return `Paused while Velvet is in the background · ${done} of ${want.length} ${what}`;
   if (txProg && txProg.phase === 'needs') return txProg.kind === k ? 'Needs its one-time download. Turn it off and on again' : `${done} of ${want.length} ${what} done`;
-  if (p && p.phase === 'loading') return k === 'speech' ? 'Loading the speech model…' : 'Loading the text reader…';
-  if (p && p.phase === 'run') return `${k === 'speech' ? 'Listening to' : 'Reading'} ${Math.min(want.length, done + 1)} of ${want.length} ${what}${p.f ? ` · ${Math.round(p.f * 100)}%` : ''}`;
+  if (p && p.phase === 'loading') return k === 'speech' ? 'Loading the speech model…' : k === 'ocr' ? 'Loading the text reader…' : 'Loading the description model…';
+  if (p && p.phase === 'run') return `${k === 'speech' ? 'Listening to' : k === 'ocr' ? 'Reading' : 'Describing'} ${Math.min(want.length, done + 1)} of ${want.length} ${what}${p.f ? ` · ${Math.round(p.f * 100)}%` : ''}`;
   return `${done} of ${want.length} ${what} done${done < want.length ? ' · continues in the background' : ''}`;
 }
-function drawTx() { const a = $('#spStatus'), b = $('#ocStatus'); if (a) a.textContent = txDesc('speech'); if (b) b.textContent = txDesc('ocr'); }
-const textTargets = k => idx ? idx.items.filter(i => k === 'speech' ? i.type === 'video' : i.type === 'photo') : [];
+function drawTx() { const a = $('#spStatus'), b = $('#ocStatus'), c = $('#cpStatus'); if (a) a.textContent = txDesc('speech'); if (b) b.textContent = txDesc('ocr'); if (c) c.textContent = txDesc('cap'); }
+const capTarget = i => i.type === 'photo' || !!i.thumb;          // videos are described from their preview frame
+const textTargets = k => idx ? idx.items.filter(i => k === 'speech' ? i.type === 'video' : k === 'ocr' ? i.type === 'photo' : capTarget(i)) : [];
 // one-time download of an add-on's files, after showing its size
 async function ensureAddon(key) {
   let st; try { st = await Addons.status(key); } catch (e) { toast('Couldn’t load the add-on list: ' + e.message, 4500); return false; }
@@ -1827,41 +1853,44 @@ function addonsGroup() {
   const row = (k, ic, c) => { const a = addonSt[k], I = Addons.INFO[k]; const have = a && !a.missing;
     return ROW({ ic, c, t: I.name, d: !a ? 'Checking…' : a.builtIn ? `Built into the app · ${bytes(a.total)}` : have ? `Downloaded · ${bytes(a.total)} · works offline` : `${bytes(a.missing)} · downloaded the first time you use it`, did: 'ad_' + k,
       right: a && !a.builtIn && have ? `<button class="btn btn-ghost btn-sm" data-adrm="${k}">Remove</button>` : '' }); };
-  return GROUP('Add-ons · on this device', [row('video', 'convert', '#C2185B'), row('speech', 'mic', '#3B7FD1'), row('ocr', 'text', '#2E9E6B')]);
+  return GROUP('Add-ons · on this device', [row('video', 'convert', '#C2185B'), row('speech', 'mic', '#3B7FD1'), row('ocr', 'text', '#2E9E6B'), row('upscale', 'upscale', '#7A4FD1'), row('bgremove', 'cutout', '#C47A2C'), row('caption', 'quote', '#1F8A9E')]);
 }
 function bindAddons() {
   $$('[data-adrm]').forEach(b => b.onclick = async () => { const k = b.dataset.adrm, I = Addons.INFO[k];
-    if ((k === 'speech' && speechOn()) || (k === 'ocr' && ocrOn())) { toast(`Turn off “${k === 'speech' ? 'Search what’s said in videos' : 'Text in photos'}” first`, 3500); return; }
+    if ((k === 'speech' && speechOn()) || (k === 'ocr' && ocrOn()) || (k === 'caption' && capOn())) { toast(`Turn off “${TXN[k === 'caption' ? 'cap' : k]}” first`, 3500); return; }
+    if ((k === 'upscale' || k === 'bgremove') && IT.busy()) { toast('Wait until the photo is finished', 3000); return; }
+    if (k === 'upscale' || k === 'bgremove') IT.shutdown();
     if (!(await confirmBox(`Remove ${I.name}?`, 'Frees the space its files use. Your photos, videos and anything already saved stay. You can download it again any time.', 'Remove', true))) return;
     await Addons.remove(k).catch(() => { }); await refreshAddonSt(); renderProfile(); toast(`${I.name} removed`); });
   if (!addonSt.video) refreshAddonSt().then(() => { if (view === 'profile' && idx) renderProfile(); });
 }
 function bindTextRows() {
   const flip = (k, sw) => { if (!sw) return; sw.onclick = async () => {
-    const s = idx.settings, on = k === 'speech' ? speechOn() : ocrOn(), name = k === 'speech' ? 'Search what’s said in videos' : 'Text in photos';
+    const s = idx.settings, on = kindOn(k), name = TXN[k];
     if (!on) {
       if (!hasWasm) { await modal(`<h3>${name} isn’t available here</h3><p>It needs WebAssembly, which this browser has turned off (usually Lockdown Mode).</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
-      if (!(await ensureAddon(k))) return;
+      if (!(await ensureAddon(AK[k]))) return;
       s[k] = Object.assign(s[k] || {}, { on: true }); await TI.open(idx, k); await save(); renderProfile(); startTextIndex();
-      toast(k === 'speech' ? 'Velvet will listen to your videos in the background' : 'Velvet will read text in your photos in the background', 3500);
+      toast(k === 'speech' ? 'Velvet will listen to your videos in the background' : k === 'ocr' ? 'Velvet will read text in your photos in the background' : 'Velvet will describe your photos and videos in the background', 3500);
     } else {
-      if (!(await confirmBox(`Turn off ${name}?`, k === 'speech' ? 'Velvet stops listening and removes the transcripts and subtitles from this device. You can turn it on again any time.' : 'Velvet stops reading and removes the text it found from this device. You can turn it on again any time.', 'Turn off', true))) return;
-      if (txProg && txProg.kind === k) txRun = 0; if (k === 'speech') Speech.shutdown(); else OCR.shutdown();
+      if (!(await confirmBox(`Turn off ${name}?`, k === 'speech' ? 'Velvet stops listening and removes the transcripts and subtitles from this device. You can turn it on again any time.' : k === 'ocr' ? 'Velvet stops reading and removes the text it found from this device. You can turn it on again any time.' : 'Velvet stops describing and removes all descriptions, including ones you edited, from this device. You can turn it on again any time.', 'Turn off', true))) return;
+      if (txProg && txProg.kind === k) txRun = 0; if (k === 'speech') Speech.shutdown(); else if (k === 'ocr') OCR.shutdown(); else Cap.shutdown();
       await TI.wipe(idx, k); renderProfile(); if (view === 'search') renderSearch();
     }
   }; };
-  flip('speech', $('#spSw')); flip('ocr', $('#ocSw'));
+  flip('speech', $('#spSw')); flip('ocr', $('#ocSw')); flip('cap', $('#cpSw'));
   if (!addonSt.speech) refreshAddonSt().then(() => drawTx());
 }
-async function openTextIndex() { try { if (speechOn()) await TI.open(idx, 'speech'); if (ocrOn()) await TI.open(idx, 'ocr'); } catch (e) { console.warn('text index open', e); } }
+async function openTextIndex() { try { if (speechOn()) await TI.open(idx, 'speech'); if (ocrOn()) await TI.open(idx, 'ocr'); if (capOn()) await TI.open(idx, 'cap'); } catch (e) { console.warn('text index open', e); } }
 // background indexing: one item at a time, after on-device AI is idle, paused while Velvet is hidden
 let txRun = 0, txSeq = 0, txProg = null, txPri = null;
 function nextTextJob(skip = new Set()) {
-  const pick = (k, it) => it && (k === 'speech' ? it.type === 'video' : it.type === 'photo') && !TI.get(k, it.id);
-  const sOn = speechOn() && !skip.has('speech'), oOn = ocrOn() && !skip.has('ocr');
-  if (txPri) { const it = itemById(txPri); txPri = null; if (sOn && pick('speech', it)) return { k: 'speech', it }; if (oOn && pick('ocr', it)) return { k: 'ocr', it }; }
+  const pick = (k, it) => it && (k === 'speech' ? it.type === 'video' : k === 'ocr' ? it.type === 'photo' : capTarget(it)) && !TI.get(k, it.id);
+  const sOn = speechOn() && !skip.has('speech'), oOn = ocrOn() && !skip.has('ocr'), cOn = capOn() && !skip.has('cap');
+  if (txPri) { const it = itemById(txPri); txPri = null; if (sOn && pick('speech', it)) return { k: 'speech', it }; if (oOn && pick('ocr', it)) return { k: 'ocr', it }; if (cOn && pick('cap', it)) return { k: 'cap', it }; }
   const order = idx.items.filter(i => !i.archived).sort((a, b) => (b.added || 0) - (a.added || 0));
   if (oOn) { const it = order.find(i => pick('ocr', i)); if (it) return { k: 'ocr', it }; }
+  if (cOn) { const it = order.find(i => pick('cap', i)); if (it) return { k: 'cap', it }; }
   if (sOn) { const it = order.find(i => pick('speech', i)); if (it) return { k: 'speech', it }; }
   return null;
 }
@@ -1870,20 +1899,20 @@ async function photoForOCR(it) {
   return it.thumb ? Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg') : null;
 }
 async function startTextIndex() {
-  if (txRun || !idx || !Store.isUnlocked() || !(speechOn() || ocrOn())) return;
+  if (txRun || !idx || !Store.isUnlocked() || !(speechOn() || ocrOn() || capOn())) return;
   const tok = txRun = ++txSeq, alive = () => txRun === tok && !!idx && Store.isUnlocked();
-  const dirty = { speech: 0, ocr: 0 }; let saved = Date.now();
-  const flush = async force => { if (!alive() && !force) return; if (!force && Date.now() - saved < 20000) return; saved = Date.now(); for (const k of ['speech', 'ocr']) if (dirty[k] && idx) { dirty[k] = 0; await TI.persist(idx, k).catch(e => console.warn('text index save', e)); } };
+  const dirty = { speech: 0, ocr: 0, cap: 0 }; let saved = Date.now();
+  const flush = async force => { if (!alive() && !force) return; if (!force && Date.now() - saved < 20000) return; saved = Date.now(); for (const k of ['speech', 'ocr', 'cap']) if (dirty[k] && idx) { dirty[k] = 0; await TI.persist(idx, k).catch(e => console.warn('text index save', e)); } };
   const ready = {}; let ff = null; const failed = new Set();
   try {
     await openTextIndex();
     for (;;) {
       if (!alive()) break;
       if (document.hidden) { txProg = { ...(txProg || {}), phase: 'paused' }; drawTx(); await flush(true); await waitVisible(); txProg = null; drawTx(); continue; }
-      if (AI.isRunning() || VT.busy() || (typeof pplProg !== 'undefined' && pplProg && pplProg.phase === 'indexing')) { await sleep(2500); continue; }
+      if (AI.isRunning() || VT.busy() || IT.busy() || (typeof pplProg !== 'undefined' && pplProg && pplProg.phase === 'indexing')) { await sleep(2500); continue; }
       const job = nextTextJob(failed); if (!job) break;
       const { k, it } = job;
-      if (ready[k] === undefined) { const st = await Addons.status(k).catch(() => null); ready[k] = !!(st && !st.missing); }
+      if (ready[k] === undefined) { const st = await Addons.status(AK[k]).catch(() => null); ready[k] = !!(st && !st.missing); }
       if (!ready[k]) { txProg = { kind: k, phase: 'needs' }; drawTx(); failed.add(k); continue; }
       txProg = { kind: k, phase: 'run', f: 0, id: it.id }; drawTx();
       try {
@@ -1891,6 +1920,10 @@ async function startTextIndex() {
           const b = await photoForOCR(it); if (!alive()) break;
           const text = b ? await OCR.read(b) : ''; if (!alive()) break;
           TI.set('ocr', it.id, { at: Date.now(), text });
+        } else if (k === 'cap') {
+          const b = it.type === 'photo' ? await photoForOCR(it) : await Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg'); if (!alive()) break;
+          const raw = b ? await Cap.describe(b) : ''; if (!alive()) break;
+          const c = Cap.clean(raw); TI.set('cap', it.id, { at: Date.now(), text: c.text, ...(c.changed ? { fx: 1 } : {}) });   // fx: age-related words were removed
         } else {
           if (ff === null) { const st = await Addons.status('video').catch(() => null); ff = !!(st && !st.missing); }
           if (it.size > Speech.MAX_DECODE && !ff) { TI.set('speech', it.id, { at: Date.now(), err: 'too large to listen to on this device' }); dirty.speech++; continue; }
@@ -1905,7 +1938,7 @@ async function startTextIndex() {
       } catch (e) {
         if (!alive() || /stopped/.test(e.message)) break;
         console.warn('text index', k, e);
-        if (/fetch|import|load|wasm|module|worker/i.test(e.message) && !TI.count(k, textTargets(k).map(i => i.id))) { failed.add(k); toast((k === 'speech' ? 'Speech search' : 'Text in photos') + ' couldn’t start: ' + e.message, 5000); }
+        if (/fetch|import|load|wasm|module|worker/i.test(e.message) && !TI.count(k, textTargets(k).map(i => i.id))) { failed.add(k); toast((k === 'speech' ? 'Speech search' : k === 'ocr' ? 'Text in photos' : 'Search descriptions') + ' couldn’t start: ' + e.message, 5000); }
         TI.set(k, it.id, { at: Date.now(), err: 'couldn’t read this one' }); dirty[k]++;
       }
       await flush(false);
@@ -1914,8 +1947,149 @@ async function startTextIndex() {
   } finally {
     if (idx && Store.isUnlocked()) await flush(true);
     if (txRun === tok) { txRun = 0; txProg = null; drawTx(); if (idx && view === 'search') renderSearch(); }
-    if (alive() || txRun === 0) { Speech.shutdown(); OCR.shutdown(); }
+    if (alive() || txRun === 0) { Speech.shutdown(); OCR.shutdown(); Cap.shutdown(); }
   }
+}
+// v1.8: description shown (and editable) in Details when Search descriptions is on
+function descHTML(it) {
+  if (!TI.isOpen('cap') || !capTarget(it)) return '';
+  const c = TI.get('cap', it.id), note = c && c.ed ? 'edited by you' : c ? 'written on this device' : 'not described yet';
+  return `<span class="lbl">Description <small style="color:var(--dim);text-transform:none;letter-spacing:0">· ${note} · helps Search</small></span><textarea class="field desc" id="tDesc" rows="2" maxlength="200" placeholder="${c ? 'No description. Write one if you like' : 'Velvet will describe this soon. You can also write one'}">${esc(c && c.text || '')}</textarea>`;
+}
+/* ---------- v1.8 photo tools: upscaler and background remover ---------- */
+async function photoTools(it, mode) {
+  if (!it || it.type !== 'photo' || !idx) return;
+  const name = mode === 'upscale' ? 'The photo upscaler' : 'The background remover';
+  if (!hasWasm) { await modal(`<h3>${name} isn’t available here</h3><p>It needs WebAssembly, which this browser has turned off (usually Lockdown Mode).</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+  if (IT.busy()) { toast('Velvet is already working on a photo'); return; }
+  if (!(await ensureAddon(mode))) return;
+  let blob, W, H;
+  try {
+    blob = await Store.readFile(it.id, it.chunks, it.mime, p => progress('Decrypting ' + it.title, p)); progress(null);
+    if (Thumbs.isHeic(it.mime, it.name)) blob = await Thumbs.displayableImage(blob, it.mime, it.name);
+    const bmp = await createImageBitmap(blob); W = bmp.width; H = bmp.height; bmp.close && bmp.close();
+  } catch (e) { progress(null); toast('Couldn’t open the photo: ' + (e.message || 'unknown format'), 5000); return; }
+  const srcUrl = URL.createObjectURL(blob); let result = null;
+  try { result = mode === 'upscale' ? await upscaleSheet(it, blob, srcUrl, W, H) : await bgSheet(it, blob, srcUrl, W, H); }
+  finally { URL.revokeObjectURL(srcUrl); if (IT.busy()) IT.cancel(); }
+  if (result && result.copy) toast(`Saved “${result.copy.title}” · ${result.copy.w}×${result.copy.h}`, 4500);
+}
+// before/after compare: drag anywhere on the picture or use the slider; "Zoom in" magnifies both sides equally
+function bindCompare(m, pre) {
+  const box = m.querySelector('#' + pre + 'Cmp'), sl = m.querySelector('#' + pre + 'Sl'), set = v => { v = Math.max(0, Math.min(100, v)); box.style.setProperty('--x', v + '%'); sl.value = v; };
+  sl.oninput = () => set(+sl.value);
+  box.addEventListener('pointerdown', e => { if (!box.classList.contains('ready')) return; e.preventDefault(); try { box.setPointerCapture(e.pointerId); } catch (_) { }
+    const mv = ev => { const r = box.getBoundingClientRect(), fx = (ev.clientX - r.left) / r.width * 100, fy = (ev.clientY - r.top) / r.height * 100;
+      if (box.classList.contains('zoom')) { box.style.setProperty('--ox', Math.max(0, Math.min(100, fx)) + '%'); box.style.setProperty('--oy', Math.max(0, Math.min(100, fy)) + '%'); } else set(fx); }; mv(e);
+    const up = () => { box.removeEventListener('pointermove', mv); box.removeEventListener('pointerup', up); box.removeEventListener('pointercancel', up); };
+    box.addEventListener('pointermove', mv); box.addEventListener('pointerup', up); box.addEventListener('pointercancel', up); });
+  const zm = m.querySelector('#' + pre + 'Zm'); if (zm) zm.onclick = e => { const b = e.target.closest('[data-z]'); if (!b) return; zm.querySelectorAll('[data-z]').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', String(x === b)); }); box.classList.toggle('zoom', b.dataset.z === 'zoom'); };
+  set(50);
+}
+function upscaleSheet(it, blob, srcUrl, W, H) {
+  const sc = IT.scales(W, H), st = { scale: sc.find(x => x.s === 4 && x.ok && W * H <= 1.2e6) ? 4 : sc[0].ok ? 2 : 0, running: false, out: null, outUrl: null, at: 0 };
+  return modal(`<h3>Upscale photo</h3><div class="meta-line">${W}×${H} · ${bytes(it.size)}</div>
+    <div class="cmp" id="upCmp" style="--ar:${W / H}"><img class="cmp-a" alt="Before" src="${srcUrl}"><div class="cmp-b" id="upBw"><img id="upB" alt="After"></div><div class="cmp-line"><span>${IC.back}${IC.chev}</span></div><span class="cmp-tag l">Before</span><span class="cmp-tag r">After</span></div>
+    <input type="range" class="cmp-sl" id="upSl" min="0" max="100" value="50" aria-label="Compare before and after" hidden>
+    <div class="chips seg" id="upSc" role="radiogroup" aria-label="Size">${sc.map(x => `<button class="chip" data-s="${x.s}" role="radio" ${x.ok ? '' : 'disabled'}>${x.s}× larger</button>`).join('')}</div>
+    <div class="chips seg mini" id="upZm" role="radiogroup" aria-label="View" hidden><button class="chip on" data-z="fit" role="radio" aria-checked="true">Whole photo</button><button class="chip" data-z="zoom" role="radio" aria-checked="false">Zoom in</button></div>
+    <div class="vt-est" id="upEst"></div>
+    <div class="vt-run" id="upRun" hidden><div class="vt-bar"><i id="upBar"></i></div><span id="upPct">Starting…</span></div>
+    <p class="sub-note vt-note">${IC.lock}Saved as a new encrypted copy. The original stays exactly as it is.</p>
+    <div class="actions"><button class="btn btn-ghost" id="upCancel">Cancel</button><button class="btn btn-primary" id="upGo">Upscale</button></div>`, (m, close) => {
+    const $m = q => m.querySelector(q);
+    const draw = () => {
+      m.querySelectorAll('#upSc [data-s]').forEach(b => { const on = +b.dataset.s === st.scale; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      const x = sc.find(v => v.s === st.scale), fresh = st.out && st.at === st.scale;
+      $m('#upEst').innerHTML = x ? `${IC.image}<span>Result <b>${x.w}×${x.h}</b>${fresh ? ` · ${bytes(st.out.blob.size)} · ${st.out.blob.type === 'image/png' ? 'PNG' : 'JPEG'}` : ''} · ${st.out && st.out.device === 'webgpu' ? 'using the graphics chip' : 'on this device'}</span>` : '';
+      if (!sc[1].ok) $m('#upEst').innerHTML += `<em class="soft">${sc[0].ok ? '4×' : 'Upscaling'} would make a picture too large for ${IT.IOS ? 'Safari on this device' : 'this device'} (over ${Math.round(IT.MAX_OUT / 1e6)} MP).</em>`;
+      $m('#upGo').textContent = fresh ? 'Save copy' : st.out ? `Upscale ${st.scale}×` : 'Upscale'; $m('#upGo').disabled = st.running || !st.scale;
+      const ready = !!st.out; $m('#upCmp').classList.toggle('ready', ready); $m('#upSl').hidden = !ready; $m('#upZm').hidden = !ready;
+    };
+    $m('#upSc').onclick = e => { const b = e.target.closest('[data-s]'); if (!b || b.disabled || st.running) return; st.scale = +b.dataset.s; UI.haptic(); draw(); };
+    bindCompare(m, 'up');
+    $m('#upCancel').onclick = () => { if (st.running) IT.cancel(); else close(undefined); };
+    $m('#upGo').onclick = async () => {
+      if (st.running) return;
+      if (st.out && st.at === st.scale) {                       // save
+        st.running = true; draw(); $m('#upRun').hidden = false; $m('#upPct').textContent = 'Encrypting & saving…'; $m('#upBar').style.width = '100%';
+        try { const copy = await savePhotoCopy(it, st.out.blob, `${st.scale}× larger`, { w: st.out.w, h: st.out.h, op: 'upscale' + st.scale }); if (st.outUrl) URL.revokeObjectURL(st.outUrl); close({ copy }); }
+        catch (e) { st.running = false; $m('#upRun').hidden = true; draw(); toast('Couldn’t save: ' + e.message, 5000); }
+        return;
+      }
+      st.running = true; m.classList.add('busy'); draw(); $m('#upRun').hidden = false; $m('#upBar').style.width = '0%'; $m('#upPct').textContent = 'Loading the upscaler…'; $m('#upCancel').textContent = 'Stop';
+      try {
+        const out = await IT.upscale(blob, it.mime, st.scale, (f, x) => { $m('#upBar').style.width = (f * 100) + '%'; $m('#upPct').textContent = `${Math.round(f * 100)}%${x && x.eta > 2 && f < 1 ? ' · about ' + fmt(x.eta) + ' left' : ''}`; });
+        if (st.outUrl) URL.revokeObjectURL(st.outUrl); st.out = out; st.at = st.scale; st.outUrl = URL.createObjectURL(out.blob); $m('#upB').src = st.outUrl;
+        await $m('#upB').decode().catch(() => { }); UI.haptic();
+      } catch (e) { if (e.cancelled) toast('Stopped. Nothing was saved'); else toast('Couldn’t upscale: ' + e.message, 6000); }
+      st.running = false; m.classList.remove('busy'); $m('#upRun').hidden = true; $m('#upCancel').textContent = 'Cancel'; draw();
+    };
+    draw();
+  }, { cls: 'tall ptools' }).then(r => { if (st.outUrl && !(r && r.copy)) URL.revokeObjectURL(st.outUrl); if (IT.busy()) IT.cancel(); return r; });
+}
+const BG_COLORS = ['#ffffff', '#f2efe9', '#111111', '#f6d6dc', '#d7e8f7', '#dcefd9', '#fff1c7'];
+function bgSheet(it, blob, srcUrl, W, H) {
+  const st = { bg: 'none', color: '#ffffff', m: null, running: true, img: null };
+  return modal(`<h3>Remove background</h3><div class="meta-line">${W}×${H} · ${bytes(it.size)}</div>
+    <div class="bg-prev" id="bgPrev" style="--ar:${W / H}"><img id="bgSrc" alt="" src="${srcUrl}"><canvas id="bgOut" hidden></canvas></div>
+    <div class="chips seg" id="bgMode" role="radiogroup" aria-label="Background"><button class="chip" data-b="none" role="radio">Transparent</button><button class="chip" data-b="color" role="radio">Color</button><button class="chip" data-b="blur" role="radio">Blurred</button></div>
+    <div class="bg-sw" id="bgSw" hidden>${BG_COLORS.map(c => `<button data-c="${c}" style="--c:${c}" aria-label="Color ${c}"></button>`).join('')}<label class="bg-pick" aria-label="Pick a color"><input type="color" id="bgCol" value="#ffffff"></label></div>
+    <div class="vt-est" id="bgEst"></div>
+    <div class="vt-run" id="bgRun"><div class="vt-bar ind"><i id="bgBar"></i></div><span id="bgPct">Loading the background remover…</span></div>
+    <p class="sub-note vt-note">${IC.lock}Saved as a new encrypted copy (PNG with transparency, or JPEG with a background). The original stays exactly as it is.</p>
+    <div class="actions"><button class="btn btn-ghost" id="bgCancel">Cancel</button><button class="btn btn-primary" id="bgGo" disabled>Save copy</button></div>`, (m, close) => {
+    const $m = q => m.querySelector(q);
+    const preview = async () => {
+      if (!st.m) return; const c = await IT.compose(st.img, st.m, { bg: st.bg, color: st.color, max: 1200 }), o = $m('#bgOut');
+      o.width = c.width; o.height = c.height; o.getContext('2d').drawImage(c, 0, 0); o.hidden = false; $m('#bgSrc').hidden = true;
+    };
+    const draw = () => {
+      m.querySelectorAll('#bgMode [data-b]').forEach(b => { const on = b.dataset.b === st.bg; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); });
+      m.querySelectorAll('#bgSw [data-c]').forEach(b => b.classList.toggle('on', b.dataset.c === st.color));
+      $m('#bgSw').hidden = st.bg !== 'color'; $m('#bgPrev').classList.toggle('checker', st.bg === 'none'); $m('#bgGo').disabled = st.running || !st.m;
+    };
+    $m('#bgMode').onclick = e => { const b = e.target.closest('[data-b]'); if (!b || st.running) return; st.bg = b.dataset.b; UI.haptic(); draw(); preview(); };
+    $m('#bgSw').onclick = e => { const b = e.target.closest('[data-c]'); if (!b) return; st.color = b.dataset.c; draw(); preview(); };
+    $m('#bgCol').oninput = e => { st.color = e.target.value; draw(); preview(); };
+    $m('#bgCancel').onclick = () => { if (st.running && !st.m) IT.cancel(); close(undefined); };
+    $m('#bgGo').onclick = async () => {
+      if (st.running || !st.m) return; st.running = true; draw(); $m('#bgRun').hidden = false; $m('#bgPct').textContent = 'Encrypting & saving…';
+      try {
+        const r = await IT.compose(st.img, st.m, { bg: st.bg, color: st.color, asBlob: true });
+        const copy = await savePhotoCopy(it, r.blob, st.bg === 'none' ? 'Cut out' : st.bg === 'blur' ? 'Blurred background' : 'New background', { w: r.w, h: r.h, op: 'bg-' + st.bg, alpha: st.bg === 'none' });
+        close({ copy });
+      } catch (e) { st.running = false; $m('#bgRun').hidden = true; draw(); toast('Couldn’t save: ' + e.message, 5000); }
+    };
+    draw();
+    (async () => {
+      try {
+        st.img = $m('#bgSrc'); await st.img.decode();
+        $m('#bgPct').textContent = 'Finding the subject…';
+        st.m = await IT.mask(blob, f => { $m('#bgPct').textContent = 'Finding the subject…'; });
+        if (!m.isConnected) return;
+        const cov = IT.coverage(st.m);
+        $m('#bgEst').innerHTML = cov < .01 ? `<em>Velvet couldn’t find a clear subject in this photo.</em>` : cov > .97 ? `<em class="soft">Almost everything was kept. This works best when one thing stands out from its background.</em>` : `${IC.cutout}<span>Subject found · ${st.m.device === 'webgpu' ? 'using the graphics chip' : 'on this device'}</span>`;
+        st.running = false; $m('#bgRun').hidden = true; draw(); await preview(); UI.haptic();
+      } catch (e) { if (!m.isConnected || e.cancelled) return; st.running = false; $m('#bgRun').hidden = true; draw(); toast('Couldn’t remove the background: ' + e.message, 6000); }
+    })();
+  }, { cls: 'tall ptools' }).then(r => { if (IT.busy()) IT.cancel(); return r; });
+}
+// Saves an edited photo as a NEW encrypted item next to the original (which is never changed)
+async function savePhotoCopy(src, blob, label, meta) {
+  if (!blob || !blob.size) throw new Error('the result is empty');
+  const id = uid(), res = await Store.putFile(id, blob);
+  let thumb = null;
+  try {
+    const bmp = await createImageBitmap(blob); let c = Thumbs.drawScaled(bmp, bmp.width, bmp.height); bmp.close && bmp.close();
+    if (meta.alpha) { const k = document.createElement('canvas'); k.width = c.width; k.height = c.height; const x = k.getContext('2d'), n = 12;   // show transparency as a soft checkerboard
+      for (let yy = 0; yy < k.height; yy += n) for (let xx = 0; xx < k.width; xx += n) { x.fillStyle = ((xx + yy) / n) % 2 ? '#d9d4d6' : '#f2eef0'; x.fillRect(xx, yy, n, n); } x.drawImage(c, 0, 0); c = k; }
+    const tb = await Thumbs.toJpeg(c), tr = await Store.putFile(id + '_t', tb); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored };
+  } catch (e) { console.warn('copy thumbnail', e); }
+  const ext = blob.type === 'image/png' ? 'png' : 'jpg', title = `${src.title} · ${label}`.slice(0, 80);
+  const it = { id, type: 'photo', title, name: title.replace(/[\\/:*?"<>|]/g, '_') + '.' + ext, ext, mime: blob.type || 'image/jpeg', size: blob.size, chunks: res.chunks, stored: res.stored, added: Date.now(), modified: Date.now(), taken: src.taken || null,
+    tags: (src.tags || []).slice(), fav: false, cols: (src.cols || []).filter(c => colById(c)), vault: !!src.vault, thumb, ar: meta.w / meta.h, dur: 0, w: meta.w, h: meta.h, codec: '', thumbT: null, from: { id: src.id, op: meta.op } };
+  idx.items.push(it); await save(); render(); startAI(); setTimeout(startTextIndex, 1500); return it;
 }
 // ---------- video tools sheet ----------
 const codecName = c => ({ hevc: 'HEVC', h264: 'H.264', mpeg4: 'MPEG-4', vp8: 'VP8', vp9: 'VP9', prores: 'ProRes', mjpeg: 'Motion JPEG', av1: 'AV1' })[c] || (c || 'video').toUpperCase();
@@ -2325,7 +2499,7 @@ function backupFiles() {
   const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); if (i.chap && i.chap.file) files.push({ id: i.chap.file.id, n: i.chap.file.chunks }); });
   const aif = idx.settings.ai && idx.settings.ai.file; if (aif) files.push({ id: aif.id, n: aif.chunks });
   const pff = idx.settings.faces && idx.settings.faces.file; if (pff) files.push({ id: pff.id, n: pff.chunks });
-  for (const k of ['speech', 'ocr']) { const f = idx.settings[k] && idx.settings[k].file; if (f) files.push({ id: f.id, n: f.chunks }); }
+  for (const k of ['speech', 'ocr', 'cap']) { const f = idx.settings[k] && idx.settings[k].file; if (f) files.push({ id: f.id, n: f.chunks }); }
   return files;
 }
 async function exportBackup() {
@@ -2402,4 +2576,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, IT, Cap, photoTools, savePhotoCopy, capOn, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

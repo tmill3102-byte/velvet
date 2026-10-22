@@ -1,0 +1,7 @@
+Velvet search descriptions (v1.8)
+Model: Microsoft Florence-2-base-ft (0.23B parameters), ONNX export by onnx-community
+  (https://huggingface.co/onnx-community/Florence-2-base-ft). License: MIT (see LICENSE.txt).
+  Files used: vision encoder, text encoder and merged decoder in 4-bit (MatMulNBits) and token
+  embeddings in 8-bit, about 215 MB in total.
+Runtime: Transformers.js (Apache-2.0) and ONNX Runtime Web (MIT), see js/vendor/transformers/.
+Captions are made on your device, cleaned of age-related words, encrypted, and never uploaded.

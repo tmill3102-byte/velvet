@@ -1,0 +1,1 @@
+{"model_type":"realesrgan","architectures":["SRVGGNetCompact"],"upscale":4}

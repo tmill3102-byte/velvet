@@ -49,3 +49,10 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 - **Text in photos** (≈7 MB): find photos and screenshots by the text in them. Details shows "Text found" with *Copy text*. Uses Tesseract (Apache-2.0), see `addons/ocr/`.
 
 Turn them on in Profile → On-device AI. Transcripts and found text are stored encrypted and included in backups. Nothing is ever uploaded.
+
+**New in v1.8:** three more optional on-device add-ons, downloaded from this site only when you first use them (the Windows app already includes them):
+- **Photo upscaler** (≈32 MB, or ≈5 MB if another AI add-on is already downloaded): make a photo 2× or 4× larger and sharper, with a before/after compare slider. Runs in tiles so memory stays bounded, with a lower size cap on iPhone. Uses Real-ESRGAN (realesr-general-x4v3, BSD-3-Clause), see `addons/upscale/`.
+- **Background remover** (≈74 MB, or ≈47 MB if another AI add-on is already downloaded): cut out the subject as a transparent PNG, or put it on a solid colour or a blurred version of its background. Uses IS-Net (DIS, Apache-2.0), see `addons/bgremove/`. (@imgly/background-removal is AGPL-3.0, so it isn't used.)
+- **Search descriptions** (≈245 MB, or ≈218 MB if another AI add-on is already downloaded): writes a short description of each photo and video so Search finds "red bicycle" or "cup on a table". Descriptions show in Details and can be edited. Uses Microsoft Florence-2-base (MIT), see `addons/caption/`. Age-related words are removed from descriptions, and descriptions never create tags or albums.
+
+Results are always saved as new encrypted copies; originals are never changed. Uses WebGPU when the device has it, otherwise WebAssembly. Nothing is uploaded.

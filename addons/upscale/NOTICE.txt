@@ -1,0 +1,7 @@
+Velvet photo upscaler (v1.8)
+Model: Real-ESRGAN "realesr-general-x4v3" (SRVGGNetCompact, 4x), by Xintao Wang et al.
+  Source: https://github.com/xinntao/Real-ESRGAN (release v0.2.5.0). License: BSD 3-Clause (see LICENSE.txt).
+  Converted to ONNX for Velvet with export-realesrgan-onnx.py (weights unchanged, fp32, any image size).
+  2x results are made by running the 4x model and averaging each 2x2 block of output pixels.
+Runtime: ONNX Runtime Web (MIT) via Transformers.js (Apache-2.0), see js/vendor/transformers/.
+Everything runs on your device. Nothing is uploaded.

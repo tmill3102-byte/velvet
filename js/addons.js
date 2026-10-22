@@ -1,4 +1,5 @@
-// Velvet v1.7 add-ons: optional on-device tools (video converter, speech search, text in photos).
+// Velvet v1.7/v1.8 add-ons: optional on-device tools (video converter, speech search, text in photos,
+// photo upscaler, background remover, search descriptions).
 // Their files live on Velvet's own site (same origin, never a CDN). They are fetched only when a feature is
 // first used, after the user sees the size, and kept in the browser cache so they work offline afterwards.
 // The Windows app ships them inside the app, so nothing is downloaded there.
@@ -20,6 +21,9 @@ export const INFO = {
   video: { name: 'Video tools', what: 'convert, compress and trim videos' },
   speech: { name: 'Speech search', what: 'find videos by what’s said and show subtitles' },
   ocr: { name: 'Text in photos', what: 'find photos and screenshots by the text in them' },
+  upscale: { name: 'Photo upscaler', what: 'make photos 2× or 4× larger and sharper' },
+  bgremove: { name: 'Background remover', what: 'cut out the subject of a photo' },
+  caption: { name: 'Search descriptions', what: 'describe your photos and videos so Search can find them by what’s in them' },
 };
 // files each add-on needs (the OCR engine variant depends on the device's WebAssembly features, like tesseract.js picks it)
 export async function files(key) {

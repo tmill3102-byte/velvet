@@ -1,0 +1,11 @@
+Velvet background remover (v1.8)
+Model: IS-Net "isnet-general-use" (Highly Accurate Dichotomous Image Segmentation), by Xuebin Qin et al.
+  Source: https://github.com/xuebinqin/DIS. License: Apache License 2.0 (see LICENSE.txt).
+  ONNX export from the rembg project (https://github.com/danielgatis/rembg, MIT, see LICENSE-rembg.txt).
+  For Velvet the convolution weights are stored as 8-bit integers with per-channel scales
+  (quantize-weights-int8.py); they are expanded back to 32-bit floats when the model loads.
+  Masks match the original model at IoU 0.994 to 0.9998 on our test images.
+Why not @imgly/background-removal: it is licensed AGPL-3.0, which is not compatible with how Velvet is
+  distributed. BRIA RMBG-1.4 is non-commercial only, and MODNet is trained for portraits, so IS-Net was chosen.
+Runtime: ONNX Runtime Web (MIT) via Transformers.js (Apache-2.0), see js/vendor/transformers/.
+Everything runs on your device. Nothing is uploaded.

@@ -21,6 +21,40 @@
     "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm"
    ]
   },
+  "upscale": {
+   "files": [
+    "addons/upscale/realesr-general-x4v3/config.json",
+    "addons/upscale/realesr-general-x4v3/onnx/model.onnx",
+    "js/vendor/transformers/transformers.min.js",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm"
+   ]
+  },
+  "bgremove": {
+   "files": [
+    "addons/bgremove/isnet-general-use/config.json",
+    "addons/bgremove/isnet-general-use/onnx/model.onnx",
+    "js/vendor/transformers/transformers.min.js",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm"
+   ]
+  },
+  "caption": {
+   "files": [
+    "addons/caption/Florence-2-base-ft/config.json",
+    "addons/caption/Florence-2-base-ft/generation_config.json",
+    "addons/caption/Florence-2-base-ft/preprocessor_config.json",
+    "addons/caption/Florence-2-base-ft/tokenizer.json",
+    "addons/caption/Florence-2-base-ft/tokenizer_config.json",
+    "addons/caption/Florence-2-base-ft/onnx/vision_encoder_q4.onnx",
+    "addons/caption/Florence-2-base-ft/onnx/embed_tokens_quantized.onnx",
+    "addons/caption/Florence-2-base-ft/onnx/encoder_model_q4.onnx",
+    "addons/caption/Florence-2-base-ft/onnx/decoder_model_merged_q4.onnx",
+    "js/vendor/transformers/transformers.min.js",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm"
+   ]
+  },
   "ocr": {
    "files": [
     "addons/ocr/tesseract.esm.min.js",
@@ -45,6 +79,19 @@
   "js/vendor/transformers/transformers.min.js": 586209,
   "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs": 53057,
   "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm": 26861777,
+  "addons/upscale/realesr-general-x4v3/config.json": 76,
+  "addons/upscale/realesr-general-x4v3/onnx/model.onnx": 4866602,
+  "addons/bgremove/isnet-general-use/config.json": 70,
+  "addons/bgremove/isnet-general-use/onnx/model.onnx": 46580104,
+  "addons/caption/Florence-2-base-ft/config.json": 5432,
+  "addons/caption/Florence-2-base-ft/generation_config.json": 292,
+  "addons/caption/Florence-2-base-ft/preprocessor_config.json": 2673,
+  "addons/caption/Florence-2-base-ft/tokenizer.json": 2297961,
+  "addons/caption/Florence-2-base-ft/tokenizer_config.json": 197658,
+  "addons/caption/Florence-2-base-ft/onnx/vision_encoder_q4.onnx": 81236858,
+  "addons/caption/Florence-2-base-ft/onnx/embed_tokens_quantized.onnx": 39390433,
+  "addons/caption/Florence-2-base-ft/onnx/encoder_model_q4.onnx": 30058778,
+  "addons/caption/Florence-2-base-ft/onnx/decoder_model_merged_q4.onnx": 64393474,
   "addons/ocr/tesseract.esm.min.js": 63220,
   "addons/ocr/worker.min.js": 111307,
   "addons/ocr/core/tesseract-core-lstm.wasm.js": 3896484,
