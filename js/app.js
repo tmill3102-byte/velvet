@@ -8,6 +8,11 @@ import * as People from './people.js';
 import * as UI from './ios.js';
 import * as CT from './ctags.js';
 import * as Dedupe from './dedupe.js';
+import * as Addons from './addons.js';
+import * as TI from './textidx.js';
+import * as VT from './vtools.js';
+import * as Speech from './speech.js';
+import * as OCR from './ocr.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -68,6 +73,13 @@ const IC = {
   open: S('<path d="M14 4h6v6M20 4l-9 9"/><path d="M19 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h4"/>'),
   info: S('<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".7" fill="currentColor"/>')
 };
+Object.assign(IC, {
+  cc: S('<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10.6 10.3a2.3 2.3 0 1 0 0 3.4M17.1 10.3a2.3 2.3 0 1 0 0 3.4"/>'),
+  scissors: S('<circle cx="6" cy="7" r="2.6"/><circle cx="6" cy="17" r="2.6"/><path d="M8.2 8.6L20 17M8.2 15.4L20 7"/>'),
+  convert: S('<path d="M4 8h12l-3-3M20 16H8l3 3"/>'),
+  copy: S('<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/>'),
+  mic: S('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/>'),
+});
 function hydrateIcons(root) { (root || document).querySelectorAll('[data-ic]').forEach(el => { if (!el.dataset.done) { el.innerHTML = IC[el.dataset.ic] || ''; el.dataset.done = '1'; if (el.tagName === 'SPAN') el.style.display = 'inline-flex'; } }); }
 
 /* ---------- helpers ---------- */
@@ -77,6 +89,7 @@ const fmt = t => { if (!isFinite(t) || t < 0) t = 0; t = Math.floor(t); const h 
 const bytes = n => { if (!n) return '0 B'; const u = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.min(4, Math.floor(Math.log(n) / Math.log(1024))); return (n / 1024 ** i).toFixed(i >= 3 ? 2 : i ? 1 : 0).replace(/\.0+$/, '') + ' ' + u[i]; };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+VT.init();
 const FB = ['linear-gradient(150deg,#5A0F24,#14040a)', 'linear-gradient(200deg,#8E0E36,#2a0612 70%)', 'radial-gradient(circle at 30% 20%,#C2185B,#3A0A18 70%)', 'linear-gradient(160deg,#3A0A18,#0B0306)', 'radial-gradient(circle at 70% 70%,#FF2E88 0,#6d0b2a 40%,#14040a 80%)', 'linear-gradient(120deg,#4A0716,#A3123F,#1A060C)'];
 const fbFor = id => FB[[...id].reduce((a, c) => a + c.charCodeAt(0), 0) % FB.length];
 let toastT, toastUndo = null;
@@ -283,11 +296,13 @@ function afterUnlock(first) {
   if (aiOn() && People.on(idx)) People.open(idx).then(() => { if (view === 'collections') renderPeopleRow('#peopleRow'); }).catch(e => console.warn('People open', e));
   if (scrubBlockedTags()) save().catch(() => { });
   if (aiOn()) AI.open(idx).then(() => { if (view === 'search') renderSearch(); setTimeout(startAI, 2500); }).catch(e => console.warn('AI open', e));
+  openTextIndex().then(() => { if (view === 'search') renderSearch(); setTimeout(startTextIndex, aiOn() ? 6000 : 3000); });
 }
 function lockNow() { hashTok++; try { closeReel(); } catch (e) { } if (typeof ruleSeen !== 'undefined') ruleSeen.clear(); if (typeof ctLast !== 'undefined') ctLast.clear();
   flushDeletes(); closeCx(); $('#toast').classList.remove('show'); toastUndo = null;
   closePlayer(); closeLightbox(); endSelect();
   $$('.modal').forEach(m => m.remove());
+  txRun = 0; txProg = null; txPri = null; VT.cancel(); Speech.shutdown(); OCR.shutdown(); TI.close(); subs = null;
   AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
   Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
@@ -554,7 +569,7 @@ function renderSearch() {
   if (!pOn) $('#searchPeople').innerHTML = ''; else if (!q) renderPeopleRow('#searchPeople'); else $('#searchPeople').innerHTML = '';
   $('#suggest').innerHTML = sug.length ? sug.map(s => `<button class="chip" data-s="${esc(s.v)}" data-k="${s.k}"${s.id ? ` data-pid="${s.id}"` : ''}>${s.k === 'tag' ? IC.tag : s.k === 'person' ? IC.people : IC.search}<span>${hl(s.v, q)}</span></button>`).join('') : '<span class="hint-line">No suggestions yet</span>';
   const res = visible().filter(i => {
-    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + [...TV.ai(i), ...TV.custom(i)].join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase();
+    const hay = (i.title + ' ' + (i.tags || []).join(' ') + ' ' + [...TV.ai(i), ...TV.custom(i)].join(' ') + ' ' + i.type + ' ' + (i.cols || []).map(id => (colById(id) || {}).name || '').join(' ') + (names.get(i.id) || '')).toLowerCase() + TI.textOf(i.id);
     if (q && !q.split(/\s+/).every(w => hay.includes(w))) return false;
     for (const t of activeTags) {
       if (t === '__fav') { if (!i.fav) return false; } else if (t === '__photo') { if (i.type !== 'photo') return false; } else if (t === '__video') { if (i.type !== 'video') return false; }
@@ -562,6 +577,7 @@ function renderSearch() {
     }
     return true;
   });
+  renderSaid(q);
   $('#resH').textContent = (q || activeTags.size) ? `Results · ${res.length}` : `Everything · ${res.length}`;
   renderGrid($('#results'), sortNew(res), emptyHTML('search', q || activeTags.size ? 'No results' : 'Nothing to search yet', q || activeTags.size ? 'Try another word, or clear a tag.' : 'Import photos and videos, then find them here by name, tag, place or person.'));
   const tok = ++smartTok;
@@ -580,6 +596,14 @@ function renderSearch() {
     }).catch(e => { if (tok === smartTok) { console.warn('smart search', e); $('#resH').textContent = `Results · ${res.length}`; } }); }, 250);
   }
 }
+// v1.7: "Said in videos": transcript matches that open the player at the moment it's said
+function renderSaid(q) {
+  const box = $('#saidRes'); if (!box) return;
+  const hits = q && q.length >= 2 && TI.isOpen('speech') ? TI.spokenHits(q, id => { const it = itemById(id); return !!(it && !it.vault && !it.archived); }).slice(0, 12) : [];
+  box.innerHTML = hits.length ? `<div class="sub-h">Said in videos · ${hits.length}</div><div class="said">${hits.map(h => { const it = itemById(h.id); return `<button class="said-row" data-id="${h.id}" data-t="${h.t}"><span class="said-th" style="--fb:${fbFor(h.id)}"><img alt="" data-tid="${h.id}"><span class="said-ts">${fmt(h.t)}</span></span><span class="said-tx"><b>${esc(it.title)}</b><span>“${hl(h.text, q)}”</span></span>${IC.chev}</button>`; }).join('')}</div>` : '';
+  box.querySelectorAll('img[data-tid]').forEach(img => { const u = thumbs.get(img.dataset.tid); if (u) img.src = u; else wantThumb(itemById(img.dataset.tid), img); });
+}
+$('#saidRes').addEventListener('click', e => { const r = e.target.closest('.said-row'); if (!r) return; const it = itemById(r.dataset.id); if (it) openPlayer(it, null, +r.dataset.t); });
 let sT; $('#q').addEventListener('input', () => { clearTimeout(sT); sT = setTimeout(renderSearch, 80); });
 $('#qClear').addEventListener('click', e => { e.preventDefault(); $('#q').value = ''; activeTags.clear(); renderSearch(); });
 $('#tags').addEventListener('click', e => { const t = e.target.closest('.tag'); if (!t) return; const k = t.dataset.tag; activeTags.has(k) ? activeTags.delete(k) : activeTags.add(k); renderSearch(); });
@@ -638,7 +662,9 @@ async function renderProfile() {
       ROW({ ic: 'vault', c: '#A3123F', t: 'Vault PIN', d: s.vaultPin ? 'On. The Vault asks for its own PIN' : 'Off. Add a second lock for the Vault', id: 'vpinBtn', tap: 1, right: `<span class="v">${s.vaultPin ? 'On' : 'Off'}</span>` }),
       ROW({ ic: 'key', c: '#8E3A6E', t: 'Change passcode', d: 'Your files stay encrypted. Only the key changes', id: 'chPass', tap: 1 })])}
     <h4 class="gh">Smart features · on this device</h4>${aiCard()}
-    ${GROUP('Videos', [ROW({ ic: 'chap', t: 'Find chapters automatically', d: 'Marks scene changes when you open a video', right: SW('autoChapters', s.autoChapters !== false, 'Find chapters automatically') })])}
+    ${GROUP('Videos', [ROW({ ic: 'chap', t: 'Find chapters automatically', d: 'Marks scene changes when you open a video', right: SW('autoChapters', s.autoChapters !== false, 'Find chapters automatically') }),
+      ROW({ ic: 'convert', c: '#C2185B', t: 'Video tools', d: 'Convert to MP4, compress or trim. Open a video, then ••• → Convert, compress or trim', did: 'vtStatus' })])}
+    ${addonsGroup()}
     ${GROUP('Backup', [
       ROW({ ic: 'download', c: '#2E9E6B', t: 'Back up now', d: 'Saves one encrypted .velvet file. Restore it on any device with your passcode', id: 'bkBtn', tap: 1 }),
       ROW({ ic: 'upload', c: '#3B7FD1', t: 'Restore from a backup', d: 'Replaces everything in Velvet on this device', id: 'rsBtn', tap: 1 }),
@@ -664,7 +690,7 @@ async function renderProfile() {
   $('#tsSeg').onclick = e => { const b = e.target.closest('[data-ts]'); if (!b) return; s.textSize = b.dataset.ts; try { localStorage.setItem('velvet.ts', s.textSize); } catch (er) { } applyTextSize(); save(); UI.haptic(); renderProfile(); };
   $('#tourBtn').onclick = showTour;
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
-  bindAICard(); $('#regenBtn').onclick = () => regenPreviews(); $('#pvBtn').onclick = previewDiagnostics; const rpb = $('#repairBtn'); if (rpb) rpb.onclick = repairAppFiles; renderEnvCard(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
+  bindAICard(); bindAddons(); $('#regenBtn').onclick = () => regenPreviews(); $('#pvBtn').onclick = previewDiagnostics; const rpb = $('#repairBtn'); if (rpb) rpb.onclick = repairAppFiles; renderEnvCard(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
 async function vaultPinFlow() {
   const s = idx.settings;
@@ -708,7 +734,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.6.0';
+const APP_VER = '1.7.0';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -753,7 +779,7 @@ async function importFiles(entries, colId, opt = {}) {
     }
   }
   if (opt.src) folderCols.forEach(c => { if (!c.src) c.src = { path: opt.src, auto: false, known: [], last: Date.now() }; });
-  await save(); progress(null); render(); if (aiOn() && done) setTimeout(startAI, 800);
+  await save(); progress(null); render(); if (aiOn() && done) setTimeout(startAI, 800); if (done) setTimeout(startTextIndex, 1500);
   const msg = [done || !dup ? `Added ${done} item${done === 1 ? '' : 's'}` : '', dup ? `${dup} already in Velvet, skipped` : '', failed ? `${failed} couldn’t be imported` : '', skipped ? `${skipped} not photos or videos` : '',
     folderCols.size ? `${folderCols.size} collection${folderCols.size > 1 ? 's' : ''} created from folders` : ''].filter(Boolean).join(' · ');
   if (!opt.quiet || done) toast(msg.replace(/^./, c => c.toUpperCase()), 4500);
@@ -857,7 +883,7 @@ function aiStatusText() {
   return `${st.indexed} of ${st.total} indexed${p && p.phase === 'done' && p.device ? ' · ' + p.device.toUpperCase() : ''}`;
 }
 async function startAI() {
-  if (!aiOn() || AI.isRunning() || !Store.isUnlocked()) return;
+  if (!aiOn() || AI.isRunning() || !Store.isUnlocked()) { if (!aiOn()) startTextIndex(); return; }
   const thumbBlob = async it => it.thumb ? Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg') : null;
   const fileBlob = async it => new File([await Store.readFile(it.id, it.chunks, it.mime)], it.name || it.title, { type: it.mime });
   try {
@@ -868,11 +894,14 @@ async function startAI() {
   if (idx && Store.isUnlocked()) { smartCache = null; await applyCustomTags({ quiet: true }).catch(e => console.warn('custom tags', e)); await applyRules().catch(e => console.warn('rules', e)); }
   if (idx && (view === 'search' || view === 'profile' || view === 'library' || view === 'collections')) render();
   if (peopleOn() && idx && Store.isUnlocked() && !AI.isRunning()) startPeople();
+  startTextIndex();
 }
 function aiCard() {
   const on = aiOn(), st = AI.stats(idx), nh = Object.keys(idx.settings.smartHidden || {}).length, nr = (idx.settings.rules || []).length, na = idx.items.filter(i => i.archived).length;
   return `<div class="card rows grp" id="aiCard">
     ${ROW({ ic: 'spark', t: 'On-device AI', d: 'Smart search, auto albums and a duplicate finder. Runs only on this device; nothing is uploaded', right: `<button class="switch" role="switch" id="aiSw" aria-checked="${on}" aria-label="On-device AI"></button>` })}
+    ${ROW({ ic: 'mic', c: '#3B7FD1', t: 'Search what’s said in videos', d: txDesc('speech'), did: 'spStatus', right: `<button class="switch" role="switch" id="spSw" aria-checked="${speechOn()}" aria-label="Search what’s said in videos"></button>` })}
+    ${ROW({ ic: 'text', c: '#2E9E6B', t: 'Text in photos', d: txDesc('ocr'), did: 'ocStatus', right: `<button class="switch" role="switch" id="ocSw" aria-checked="${ocrOn()}" aria-label="Text in photos"></button>` })}
     ${on ? `${ROW({ ic: 'bolt', c: '#C47A2C', t: 'Indexing', d: aiStatusText(), did: 'aiStatus', right: `<button class="btn btn-ghost btn-sm" id="aiIdx">${AI.isRunning() ? 'Pause' : 'Index now'}</button>` })}
     ${ROW({ ic: 'image', c: '#3B7FD1', t: 'Duplicates & look-alikes', d: 'Review them side by side and keep the best', id: 'aiDup', tap: 1 })}
     ${ROW({ ic: 'star', c: '#D4A017', t: 'Best shots', d: 'Keep the best of each burst, tuck the rest away', id: 'aiBest', tap: 1 })}
@@ -894,7 +923,7 @@ function bindAICard() {
       s.ai.on = true; await save(); await AI.open(idx); renderProfile(); startAI();
     } else { s.ai.on = false; AI.stop(); People.stop(); await save(); renderProfile(); render(); }
   };
-  bindPeopleCard();
+  bindPeopleCard(); bindTextRows();
   const ib = $('#aiIdx'); if (ib) ib.onclick = () => { if (AI.isRunning()) { AI.stop(); ib.textContent = 'Index now'; } else { startAI(); ib.textContent = 'Pause'; } };
   const db = $('#aiDup'); if (db) db.onclick = () => nav('dupes'); const bb = $('#aiBest'); if (bb) bb.onclick = () => nav('best'); const rb = $('#aiRules'); if (rb) rb.onclick = () => nav('rules'); const hb = $('#aiHid'); if (hb) hb.onclick = hiddenAlbumsDialog; const ctb = $('#aiCT'); if (ctb) ctb.onclick = () => nav('tags'); const ab = $('#aiArch'); if (ab) ab.onclick = () => nav('archive');
   const wb = $('#aiWipe'); if (wb) wb.onclick = async () => { if (!(await confirmBox('Remove AI data?', 'Deletes smart-search data and AI tag suggestions from this device. Your photos, videos and your own tags stay. You can index again any time.', 'Remove', true))) return; AI.stop(); await AI.wipe(idx); renderProfile(); toast('AI data removed'); };
@@ -1085,7 +1114,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v10';
+const SW_VER = 'velvet-v11';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -1242,6 +1271,7 @@ async function deleteItems(ids, opt = {}) {
     idx.items = idx.items.filter(x => x !== it); idx.collections.forEach(c => { if (c.cover === id) { c.cover = null; covers.push([c, id]); } });
   }
   AI.forget(ids); if (aiOn()) await AI.persist(idx).catch(() => { });
+  TI.forget(ids); for (const k of ['speech', 'ocr']) if (TI.isOpen(k) && idx.settings[k] && idx.settings[k].file) await TI.persist(idx, k).catch(() => { });
   if (People.isOpen()) { People.forget(ids); await People.persist(idx).catch(() => { }); }
   await save(); render(); UI.haptic('heavy');
   const batch = gone.map(g => g.it); pendingDel.push(...batch); clearTimeout(delT); delT = setTimeout(flushDeletes, 7000);
@@ -1278,11 +1308,13 @@ async function itemSheet(it) {
     <span class="lbl">Tags</span><div class="taged" id="tTags"></div>
     ${ctT.length ? `<span class="lbl">Your AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· tap × if it’s wrong. The tag learns from it</small></span><div class="taged ai" id="tCT">${ctT.map(t => `<span class="tag ai" data-ctw="${t.id}">${IC.spark}${esc(t.name)}<button data-ctno="${t.id}" aria-label="Not ${esc(t.name)}">×</button></span>`).join('')}</div>` : ''}
     ${aiT.length ? `<span class="lbl">AI tags <small style="color:var(--dim);text-transform:none;letter-spacing:0">· suggested on this device. Tap ✓ to keep or × to remove</small></span><div class="taged ai" id="tAI"></div>` : ''}
+    ${textFoundHTML(it)}
     <span class="lbl">Collections</span><div class="clist">${idx.collections.map(c => `<label><input type="checkbox" value="${c.id}" ${it.cols.includes(c.id) ? 'checked' : ''}>${esc(c.name)}${c.cover === it.id ? ' <small style="color:var(--mag2)">· cover</small>' : ''}</label>`).join('') || '<span style="color:var(--dim);font-size:13px">No collections yet. Create one in Collections.</span>'}</div>
     <div class="menu" style="margin-top:14px">
       <button data-a="fav">${IC.heart}${it.fav ? 'Remove from Favorites' : 'Add to Favorites'}</button>
       ${it.cols.length ? `<button data-a="cover">${IC.image}Use as cover of its collection${it.cols.length > 1 ? 's' : ''}</button>` : ''}
       <button data-a="vault">${IC.vault}${it.vault ? 'Move back to Library' : 'Move to Vault'}</button>
+      ${it.type === 'video' ? `<button data-a="vtools">${IC.convert}Convert, compress or trim…</button>` : ''}
       <button data-a="export">${IC.download}Save a decrypted copy…</button>
       <button class="danger" data-a="delete">${IC.trash}Delete</button></div>
     <div class="actions"><button class="btn btn-primary" data-ok>Done</button></div>`, (m, close) => {
@@ -1290,6 +1322,8 @@ async function itemSheet(it) {
     const draw = () => { box.innerHTML = tags.map((t, i) => `<span class="tag on">${esc(t)}<button data-x="${i}" aria-label="Remove">×</button></span>`).join('') + `<input id="tIn" placeholder="Add a tag and press Enter" autocomplete="off">`; const inp = box.querySelector('#tIn');
       inp.onkeydown = e => { if ((e.key === 'Enter' || e.key === ',') && inp.value.trim()) { e.preventDefault(); const v = inp.value.trim().toLowerCase().slice(0, 30); if (!tags.includes(v)) tags.push(v); draw(); box.querySelector('#tIn').focus(); } else if (e.key === 'Backspace' && !inp.value && tags.length) { tags.pop(); draw(); box.querySelector('#tIn').focus(); } }; };
     draw(); box.addEventListener('click', e => { const x = e.target.closest('[data-x]'); if (x) { tags.splice(+x.dataset.x, 1); draw(); } });
+    const cpy = m.querySelector('#txCopy'); if (cpy) cpy.onclick = () => copyText(cpy.dataset.kind === 'speech' ? ((TI.get('speech', it.id) || {}).segs || []).map(x => x[2]).join('\n') : (TI.get('ocr', it.id) || {}).text || '');
+    m.querySelectorAll('[data-sayt]').forEach(b => b.onclick = () => { close(undefined); openPlayer(it, null, +b.dataset.sayt); });
     const ctBox = m.querySelector('#tCT'); if (ctBox) ctBox.addEventListener('click', e => { const no = e.target.closest('[data-ctno]'); if (!no) return; ctNo.push(no.dataset.ctno); const w = ctBox.querySelector(`[data-ctw="${no.dataset.ctno}"]`); if (w) w.remove(); });
     const aiBox = m.querySelector('#tAI');
     const drawAI = () => { if (!aiBox) return; aiBox.innerHTML = aiT.map((t, i) => `<span class="tag ai">${IC.spark}${esc(TV.show(t) || t)}<button data-aiok="${i}" aria-label="Keep tag">✓</button><button data-aino="${i}" aria-label="Remove tag">×</button></span>`).join('') || '<span style="color:var(--dim);font-size:13px">No AI suggestions left</span>'; };
@@ -1308,6 +1342,7 @@ async function itemSheet(it) {
   else if (res.a === 'cover') { it.cols.forEach(cid => { const c = colById(cid); if (c) c.cover = it.id; }); await save(); toast('Cover updated'); }
   else if (res.a === 'vault') { closeLightbox(); closePlayer(); setVault([it.id], !it.vault); return; }
   else if (res.a === 'export') exportItem(it);
+  else if (res.a === 'vtools') { vid.pause(); videoTools(it); }
   else if (res.a === 'delete') { if (await deleteItems([it.id])) { closeLightbox(); closePlayer(); } return; }
   render(); if (lb.classList.contains('open')) { $('#lbTitle').textContent = it.title; $('#lbTags').innerHTML = it.tags.map(t => `<span>#${esc(t)}</span>`).join(''); }
   if (curVid === it) $('#plTitle').textContent = it.title;
@@ -1428,7 +1463,7 @@ lb.addEventListener('pointerup', e => { if (sx === null) return; const dx = e.cl
 const pl = $('#player'), vid = $('#vid'); let curVid = null, plList = [], hideT, dragging = false, speedI = 0, plTok = 0; const SPEEDS = [1, 1.5, 2];
 function setIcon(btn, name) { const s = btn.querySelector('[data-ic]'); s.dataset.ic = name; s.innerHTML = IC[name]; }
 function syncFavButtons() { if (lb.classList.contains('open')) $('#lbFav').classList.toggle('on', !!(lbList[lbIdx] || {}).fav); $('#cFav').classList.toggle('on', !!(curVid && curVid.fav)); }
-async function openPlayer(it, list) {
+async function openPlayer(it, list, startAt) {
   curVid = it; plList = (list || visible()).filter(x => x.type === 'video'); const tok = ++plTok;
   pl.classList.add('open', 'loading'); pl.classList.remove('idle');
   $('#plTitle').textContent = it.title; $('#fill').style.width = '0%'; $('#knob').style.left = '0%'; $('#buf').style.width = '0%';
@@ -1437,10 +1472,11 @@ async function openPlayer(it, list) {
   try {
     const u = await getFull(it, p => { if (tok === plTok) flash('Decrypting ' + Math.round(p * 100) + '%', true); });
     if (tok !== plTok) return; $('#plMsg').classList.remove('show');
-    vid.src = u; playerChapters(it, u, tok); vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
+    vid.src = u; if (startAt > 0) { const go = () => { try { vid.currentTime = Math.max(0, startAt - 0.3); } catch (e) { } }; if (vid.readyState >= 1) go(); else vid.addEventListener('loadedmetadata', go, { once: true }); }
+    loadSubs(it); playerChapters(it, u, tok); vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
   } catch (e) { if (tok === plTok) { pl.classList.remove('loading'); flash('Can’t open this video: ' + e.message); } }
 }
-function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; clearChapters(); vid.pause(); vid.removeAttribute('src'); vid.load(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
+function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; subs = null; drawSub(); clearChapters(); vid.pause(); vid.removeAttribute('src'); vid.load(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
 function renderRelated() {
   const vids = plList.length > 1 ? plList : (curVid && curVid.vault ? idx.items.filter(i => i.vault && i.type === 'video') : visible().filter(i => i.type === 'video'));
   $('#rel').innerHTML = vids.slice(0, 30).map(v => `<div class="rel-item ${v === curVid ? 'cur' : ''}" data-id="${v.id}" style="--fb:${fbFor(v.id)}"><img alt="" data-tid="${v.id}"><div class="shade"></div><span class="t">${esc(v.title)}</span><span class="dur">${fmt(v.dur)}</span></div>`).join('');
@@ -1457,8 +1493,8 @@ $('#cMute').onclick = () => { vid.muted = !vid.muted; setIcon($('#cMute'), vid.m
 $('#cFav').onclick = () => { if (curVid) toggleFav(curVid); };
 $('#plThumb').onclick = () => setPreviewFromPlayer();
 $('#plMore').onclick = async () => { if (!curVid) return; const it = curVid;
-  const k = await actionSheet(it.title, [{ r: 'details', label: 'Details & tags', ic: 'info' }, { r: 'speed', label: `Speed: ${SPEEDS[speedI]}x`, ic: 'fwd' }, { r: 'mute', label: vid.muted ? 'Turn sound on' : 'Mute', ic: vid.muted ? 'vol' : 'mute' }, { r: 'cover', label: 'Use this frame as cover', ic: 'image' }, { r: 'full', label: 'Full screen', ic: 'full' }]);
-  if (k === 'details') { vid.pause(); itemSheet(it); } else if (k === 'speed') $('#cSpeed').click(); else if (k === 'mute') $('#cMute').click(); else if (k === 'cover') setPreviewFromPlayer(); else if (k === 'full') $('#cFull').click(); };
+  const k = await actionSheet(it.title, [{ r: 'details', label: 'Details & tags', ic: 'info' }, { r: 'vtools', label: 'Convert, compress or trim…', ic: 'convert' }, { r: 'cc', label: subs ? (subsOn() ? 'Subtitles off' : 'Subtitles on') : 'Subtitles', ic: 'cc' }, { r: 'speed', label: `Speed: ${SPEEDS[speedI]}x`, ic: 'fwd' }, { r: 'mute', label: vid.muted ? 'Turn sound on' : 'Mute', ic: vid.muted ? 'vol' : 'mute' }, { r: 'cover', label: 'Use this frame as cover', ic: 'image' }, { r: 'full', label: 'Full screen', ic: 'full' }]);
+  if (k === 'details') { vid.pause(); itemSheet(it); } else if (k === 'vtools') { vid.pause(); videoTools(it); } else if (k === 'cc') $('#cCC').click(); else if (k === 'speed') $('#cSpeed').click(); else if (k === 'mute') $('#cMute').click(); else if (k === 'cover') setPreviewFromPlayer(); else if (k === 'full') $('#cFull').click(); };
 $('#cFull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
   else if (pl.requestFullscreen) pl.requestFullscreen().catch(() => { if (vid.webkitEnterFullscreen) vid.webkitEnterFullscreen(); });
@@ -1470,6 +1506,27 @@ vid.addEventListener('play', syncPlay); vid.addEventListener('pause', syncPlay);
 vid.addEventListener('waiting', () => pl.classList.add('loading'));
 ['playing', 'canplay', 'loadeddata', 'pause'].forEach(ev => vid.addEventListener(ev, () => pl.classList.remove('loading')));
 vid.addEventListener('loadedmetadata', () => { vid.playbackRate = SPEEDS[speedI]; if (curVid && isFinite(vid.duration) && Math.abs((curVid.dur || 0) - vid.duration) > .5) { curVid.dur = vid.duration; save(); } updProg(); });
+// v1.7 subtitles (CC) from the on-device transcript
+let subs = null;
+const subsOn = () => !!(idx && idx.settings.subs);
+function loadSubs(it) { const e = TI.get('speech', it.id); subs = e && e.segs && e.segs.length ? e.segs : null; const b = $('#cCC'); b.classList.toggle('on', subsOn() && !!subs); b.classList.toggle('na', !subs); b.setAttribute('aria-pressed', String(subsOn() && !!subs)); drawSub(); }
+function drawSub() {
+  const el = $('#plSub'); if (!el) return; let t = '';
+  if (subs && subsOn()) { const now = vid.currentTime || 0; const s = subs.find(x => now >= x[0] - 0.1 && now < x[1] + 0.6); if (s) t = s[2]; }
+  if (el.textContent !== t) el.textContent = t; el.classList.toggle('show', !!t);
+}
+$('#cCC').onclick = async () => {
+  if (!curVid || !idx) return;
+  if (!subs) {
+    if (!speechOn()) { toast('Turn on “Search what’s said in videos” in Profile to get subtitles', 4200); return; }
+    const e = TI.get('speech', curVid.id);
+    if (e && e.err) { toast('No subtitles: ' + e.err, 3800); return; }
+    if (e) { toast('No speech found in this video', 3000); return; }
+    txPri = curVid.id; startTextIndex(); toast('Velvet will listen to this video next. Subtitles appear when it’s done', 4200); return;
+  }
+  idx.settings.subs = !subsOn(); save(); loadSubs(curVid); flash(subsOn() ? 'Subtitles on' : 'Subtitles off');
+};
+vid.addEventListener('timeupdate', drawSub);
 vid.addEventListener('timeupdate', updProg); vid.addEventListener('progress', updProg);
 vid.addEventListener('ended', () => { pl.classList.remove('idle'); const i = plList.indexOf(curVid); const n = plList[(i + 1) % plList.length]; if (n && n !== curVid) { flash('Up next: ' + n.title); const c = curVid; setTimeout(() => { if (curVid === c && vid.ended) openPlayer(n, plList); }, 1600); } });
 vid.addEventListener('error', () => { if (curVid && vid.getAttribute('src')) { pl.classList.remove('loading'); flash(Thumbs.isHevc(curVid.codec) ? 'This is an HEVC (iPhone) video, which this device can’t decode. It plays on iPhone; on Windows install “HEVC Video Extensions”, or record in “Most Compatible”.' : 'This video format can’t play here (try H.264 MP4)'); } });
@@ -1714,6 +1771,239 @@ async function saveReelItem(blob, r, dur, w, h) {
   const title = `${r.title} · Highlights`.slice(0, 80);
   const it = { id, type: 'video', title, name: title + '.' + ext, ext, mime, size: blob.size, chunks: res.chunks, stored: res.stored, added: Date.now(), modified: Date.now(), taken: null,
     tags: ['highlights'], fav: false, cols: r.col && colById(r.col) ? [r.col] : [], vault: r.vault, thumb, ar: w / h, dur, w, h, codec: /mp4/.test(mime) ? 'avc1' : 'vp8', thumbT: null, reel: { from: r.src.slice(0, 50), clips: r.segs.length } };
+  idx.items.push(it); await save(); render(); startAI(); return it;
+}
+
+
+/* ---------- v1.7 add-ons: video tools, speech search, text in photos (all on this device) ---------- */
+const speechOn = () => !!(idx && idx.settings.speech && idx.settings.speech.on);
+const ocrOn = () => !!(idx && idx.settings.ocr && idx.settings.ocr.on);
+const waitVisible = () => !document.hidden ? Promise.resolve() : new Promise(r => { const f = () => { if (!document.hidden) { document.removeEventListener('visibilitychange', f); r(); } }; document.addEventListener('visibilitychange', f); });
+async function copyText(t) {
+  if (!t) return;
+  try { await navigator.clipboard.writeText(t); toast('Text copied'); }
+  catch (e) { const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand('copy'); } catch (_) { } ta.remove(); toast(ok ? 'Text copied' : 'Couldn’t copy here. Press and hold the text to select it'); }
+}
+function textFoundHTML(it) {
+  const o = TI.get('ocr', it.id), sp = TI.get('speech', it.id);
+  let h = '';
+  if (o && o.text) h += `<span class="lbl">Text found</span><div class="txfound"><div class="txt" tabindex="0">${esc(o.text)}</div><button class="btn btn-ghost btn-sm" id="txCopy" data-kind="ocr">${IC.copy}Copy text</button></div>`;
+  else if (sp && sp.segs && sp.segs.length) h += `<span class="lbl">What’s said <small style="color:var(--dim);text-transform:none;letter-spacing:0">· tap a line to play from there</small></span><div class="txfound"><div class="txt said-lines">${sp.segs.slice(0, 40).map(x => `<button data-sayt="${x[0]}"><i>${fmt(x[0])}</i>${esc(x[2])}</button>`).join('')}</div><button class="btn btn-ghost btn-sm" id="txCopy" data-kind="speech">${IC.copy}Copy transcript</button></div>`;
+  return h;
+}
+// sizes per add-on, filled in after the (small) add-on list loads
+const addonSt = {};
+async function refreshAddonSt() { for (const k of ['video', 'speech', 'ocr']) { try { addonSt[k] = await Addons.status(k); } catch (e) { addonSt[k] = null; } } }
+const sizeNote = k => { const a = addonSt[k]; if (!a) return ''; return a.builtIn ? 'built into the app' : a.missing ? `${bytes(a.missing)} one-time download` : 'downloaded, works offline'; };
+function txDesc(k) {
+  const base = k === 'speech' ? 'Find videos by what’s said and turn on subtitles. Listens only on this device' : 'Find photos and screenshots by the words in them. Reads only on this device';
+  const on = k === 'speech' ? speechOn() : ocrOn(); if (!on) { const n = sizeNote(k); return base + (n ? ' · ' + n : ''); }
+  return txStatus(k);
+}
+function txStatus(k) {
+  const want = textTargets(k), done = TI.count(k, want.map(i => i.id)), what = k === 'speech' ? 'videos' : 'photos';
+  const p = txProg && txProg.kind === k ? txProg : null;
+  if (txProg && txProg.phase === 'paused') return `Paused while Velvet is in the background · ${done} of ${want.length} ${what}`;
+  if (txProg && txProg.phase === 'needs') return txProg.kind === k ? 'Needs its one-time download. Turn it off and on again' : `${done} of ${want.length} ${what} done`;
+  if (p && p.phase === 'loading') return k === 'speech' ? 'Loading the speech model…' : 'Loading the text reader…';
+  if (p && p.phase === 'run') return `${k === 'speech' ? 'Listening to' : 'Reading'} ${Math.min(want.length, done + 1)} of ${want.length} ${what}${p.f ? ` · ${Math.round(p.f * 100)}%` : ''}`;
+  return `${done} of ${want.length} ${what} done${done < want.length ? ' · continues in the background' : ''}`;
+}
+function drawTx() { const a = $('#spStatus'), b = $('#ocStatus'); if (a) a.textContent = txDesc('speech'); if (b) b.textContent = txDesc('ocr'); }
+const textTargets = k => idx ? idx.items.filter(i => k === 'speech' ? i.type === 'video' : i.type === 'photo') : [];
+// one-time download of an add-on's files, after showing its size
+async function ensureAddon(key) {
+  let st; try { st = await Addons.status(key); } catch (e) { toast('Couldn’t load the add-on list: ' + e.message, 4500); return false; }
+  addonSt[key] = st; if (!st.missing) return true;
+  const I = Addons.INFO[key];
+  if (navigator.onLine === false) { await modal(`<h3>${esc(I.name)} needs a download</h3><p>Connect to the internet once to download it (${bytes(st.missing)}). After that it works offline.</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return false; }
+  if (!(await confirmBox(`Download ${I.name}?`, `To ${esc(I.what)}, Velvet needs a one-time download of <b>${bytes(st.missing)}</b> from Velvet’s own site. After that it works offline. Your photos and videos never leave this device.`, 'Download'))) return false;
+  try {
+    await Addons.download(key, (f, got, tot) => progress(`Downloading ${I.name} · ${bytes(got)} of ${bytes(tot)}`, f));
+    progress(null); addonSt[key] = await Addons.status(key).catch(() => null); toast(`${I.name} is ready and works offline`); return true;
+  } catch (e) { progress(null); toast('The download didn’t finish: ' + e.message, 5000); return false; }
+}
+function addonsGroup() {
+  const row = (k, ic, c) => { const a = addonSt[k], I = Addons.INFO[k]; const have = a && !a.missing;
+    return ROW({ ic, c, t: I.name, d: !a ? 'Checking…' : a.builtIn ? `Built into the app · ${bytes(a.total)}` : have ? `Downloaded · ${bytes(a.total)} · works offline` : `${bytes(a.missing)} · downloaded the first time you use it`, did: 'ad_' + k,
+      right: a && !a.builtIn && have ? `<button class="btn btn-ghost btn-sm" data-adrm="${k}">Remove</button>` : '' }); };
+  return GROUP('Add-ons · on this device', [row('video', 'convert', '#C2185B'), row('speech', 'mic', '#3B7FD1'), row('ocr', 'text', '#2E9E6B')]);
+}
+function bindAddons() {
+  $$('[data-adrm]').forEach(b => b.onclick = async () => { const k = b.dataset.adrm, I = Addons.INFO[k];
+    if ((k === 'speech' && speechOn()) || (k === 'ocr' && ocrOn())) { toast(`Turn off “${k === 'speech' ? 'Search what’s said in videos' : 'Text in photos'}” first`, 3500); return; }
+    if (!(await confirmBox(`Remove ${I.name}?`, 'Frees the space its files use. Your photos, videos and anything already saved stay. You can download it again any time.', 'Remove', true))) return;
+    await Addons.remove(k).catch(() => { }); await refreshAddonSt(); renderProfile(); toast(`${I.name} removed`); });
+  if (!addonSt.video) refreshAddonSt().then(() => { if (view === 'profile' && idx) renderProfile(); });
+}
+function bindTextRows() {
+  const flip = (k, sw) => { if (!sw) return; sw.onclick = async () => {
+    const s = idx.settings, on = k === 'speech' ? speechOn() : ocrOn(), name = k === 'speech' ? 'Search what’s said in videos' : 'Text in photos';
+    if (!on) {
+      if (!hasWasm) { await modal(`<h3>${name} isn’t available here</h3><p>It needs WebAssembly, which this browser has turned off (usually Lockdown Mode).</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+      if (!(await ensureAddon(k))) return;
+      s[k] = Object.assign(s[k] || {}, { on: true }); await TI.open(idx, k); await save(); renderProfile(); startTextIndex();
+      toast(k === 'speech' ? 'Velvet will listen to your videos in the background' : 'Velvet will read text in your photos in the background', 3500);
+    } else {
+      if (!(await confirmBox(`Turn off ${name}?`, k === 'speech' ? 'Velvet stops listening and removes the transcripts and subtitles from this device. You can turn it on again any time.' : 'Velvet stops reading and removes the text it found from this device. You can turn it on again any time.', 'Turn off', true))) return;
+      if (txProg && txProg.kind === k) txRun = 0; if (k === 'speech') Speech.shutdown(); else OCR.shutdown();
+      await TI.wipe(idx, k); renderProfile(); if (view === 'search') renderSearch();
+    }
+  }; };
+  flip('speech', $('#spSw')); flip('ocr', $('#ocSw'));
+  if (!addonSt.speech) refreshAddonSt().then(() => drawTx());
+}
+async function openTextIndex() { try { if (speechOn()) await TI.open(idx, 'speech'); if (ocrOn()) await TI.open(idx, 'ocr'); } catch (e) { console.warn('text index open', e); } }
+// background indexing: one item at a time, after on-device AI is idle, paused while Velvet is hidden
+let txRun = 0, txSeq = 0, txProg = null, txPri = null;
+function nextTextJob(skip = new Set()) {
+  const pick = (k, it) => it && (k === 'speech' ? it.type === 'video' : it.type === 'photo') && !TI.get(k, it.id);
+  const sOn = speechOn() && !skip.has('speech'), oOn = ocrOn() && !skip.has('ocr');
+  if (txPri) { const it = itemById(txPri); txPri = null; if (sOn && pick('speech', it)) return { k: 'speech', it }; if (oOn && pick('ocr', it)) return { k: 'ocr', it }; }
+  const order = idx.items.filter(i => !i.archived).sort((a, b) => (b.added || 0) - (a.added || 0));
+  if (oOn) { const it = order.find(i => pick('ocr', i)); if (it) return { k: 'ocr', it }; }
+  if (sOn) { const it = order.find(i => pick('speech', i)); if (it) return { k: 'speech', it }; }
+  return null;
+}
+async function photoForOCR(it) {
+  try { if (it.size < 60 * 1024 ** 2) { const b = await Store.readFile(it.id, it.chunks, it.mime); await createImageBitmap(b).then(x => x.close && x.close()); return b; } } catch (e) { }
+  return it.thumb ? Store.readFile(it.thumb.id, it.thumb.chunks, 'image/jpeg') : null;
+}
+async function startTextIndex() {
+  if (txRun || !idx || !Store.isUnlocked() || !(speechOn() || ocrOn())) return;
+  const tok = txRun = ++txSeq, alive = () => txRun === tok && !!idx && Store.isUnlocked();
+  const dirty = { speech: 0, ocr: 0 }; let saved = Date.now();
+  const flush = async force => { if (!alive() && !force) return; if (!force && Date.now() - saved < 20000) return; saved = Date.now(); for (const k of ['speech', 'ocr']) if (dirty[k] && idx) { dirty[k] = 0; await TI.persist(idx, k).catch(e => console.warn('text index save', e)); } };
+  const ready = {}; let ff = null; const failed = new Set();
+  try {
+    await openTextIndex();
+    for (;;) {
+      if (!alive()) break;
+      if (document.hidden) { txProg = { ...(txProg || {}), phase: 'paused' }; drawTx(); await flush(true); await waitVisible(); txProg = null; drawTx(); continue; }
+      if (AI.isRunning() || VT.busy() || (typeof pplProg !== 'undefined' && pplProg && pplProg.phase === 'indexing')) { await sleep(2500); continue; }
+      const job = nextTextJob(failed); if (!job) break;
+      const { k, it } = job;
+      if (ready[k] === undefined) { const st = await Addons.status(k).catch(() => null); ready[k] = !!(st && !st.missing); }
+      if (!ready[k]) { txProg = { kind: k, phase: 'needs' }; drawTx(); failed.add(k); continue; }
+      txProg = { kind: k, phase: 'run', f: 0, id: it.id }; drawTx();
+      try {
+        if (k === 'ocr') {
+          const b = await photoForOCR(it); if (!alive()) break;
+          const text = b ? await OCR.read(b) : ''; if (!alive()) break;
+          TI.set('ocr', it.id, { at: Date.now(), text });
+        } else {
+          if (ff === null) { const st = await Addons.status('video').catch(() => null); ff = !!(st && !st.missing); }
+          if (it.size > Speech.MAX_DECODE && !ff) { TI.set('speech', it.id, { at: Date.now(), err: 'too large to listen to on this device' }); dirty.speech++; continue; }
+          const b = await Store.readFile(it.id, it.chunks, it.mime); if (!alive()) break;
+          let pcm = null; try { pcm = await Speech.audioOf(b, it.name || 'video.' + (it.ext || 'mp4'), ff); } catch (e) { TI.set('speech', it.id, { at: Date.now(), err: /no audio/.test(e.message) ? 'no sound' : e.message }); dirty.speech++; continue; }
+          if (!pcm || pcm.length < 16000) { TI.set('speech', it.id, { at: Date.now(), segs: [] }); dirty.speech++; continue; }
+          const segs = await Speech.transcribe(pcm, { onProgress: f => { if (txProg && txProg.id === it.id) { txProg.f = f; drawTx(); } }, shouldPause: async () => { if (document.hidden) { txProg = { ...txProg, phase: 'paused' }; drawTx(); await waitVisible(); txProg = { ...txProg, phase: 'run' }; drawTx(); } }, shouldStop: () => !alive() });
+          if (!alive()) break;
+          TI.set('speech', it.id, { at: Date.now(), segs, dur: Math.round(pcm.length / 1600) / 10 });
+        }
+        dirty[k]++;
+      } catch (e) {
+        if (!alive() || /stopped/.test(e.message)) break;
+        console.warn('text index', k, e);
+        if (/fetch|import|load|wasm|module|worker/i.test(e.message) && !TI.count(k, textTargets(k).map(i => i.id))) { failed.add(k); toast((k === 'speech' ? 'Speech search' : 'Text in photos') + ' couldn’t start: ' + e.message, 5000); }
+        TI.set(k, it.id, { at: Date.now(), err: 'couldn’t read this one' }); dirty[k]++;
+      }
+      await flush(false);
+      if (view === 'search' && $('#q').value.trim()) renderSearch();
+    }
+  } finally {
+    if (idx && Store.isUnlocked()) await flush(true);
+    if (txRun === tok) { txRun = 0; txProg = null; drawTx(); if (idx && view === 'search') renderSearch(); }
+    if (alive() || txRun === 0) { Speech.shutdown(); OCR.shutdown(); }
+  }
+}
+// ---------- video tools sheet ----------
+const codecName = c => ({ hevc: 'HEVC', h264: 'H.264', mpeg4: 'MPEG-4', vp8: 'VP8', vp9: 'VP9', prores: 'ProRes', mjpeg: 'Motion JPEG', av1: 'AV1' })[c] || (c || 'video').toUpperCase();
+async function videoTools(it) {
+  if (!it || it.type !== 'video' || !idx) return;
+  if (!hasWasm) { await modal(`<h3>Video tools aren’t available here</h3><p>They need WebAssembly, which this browser has turned off (usually Lockdown Mode).</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+  if (it.size > VT.LIMIT) { await modal(`<h3>This video is too large to convert here</h3><p>It’s ${bytes(it.size)}. ${isIOS ? `On iPhone and iPad, Velvet converts videos up to ${bytes(VT.LIMIT)} so Safari doesn’t run out of memory and close the app. Bigger videos can be converted in Velvet for Windows.` : `Velvet converts videos up to ${bytes(VT.LIMIT)}.`}</p><div class="actions"><button class="btn btn-primary" data-r="">OK</button></div>`); return; }
+  if (VT.busy()) { toast('A conversion is already running'); return; }
+  if (!(await ensureAddon('video'))) return;
+  let file, info, purl = null;
+  try {
+    const b = await Store.readFile(it.id, it.chunks, it.mime, p => progress('Decrypting ' + it.title, p * 0.9));
+    file = new File([b], it.name || 'video.' + (it.ext || 'mp4'), { type: it.mime || 'video/mp4' });
+    progress('Reading the video…', 0.95); info = await VT.probe(file, file.name); progress(null);
+  } catch (e) { progress(null); toast('Couldn’t open the video: ' + e.message, 5000); return; }
+  if (!info.ok) { toast('Velvet can’t read this video’s format', 4500); return; }
+  const st = { mode: info.vcodec === 'h264' && /mp4/.test(it.mime || '') ? 'compress' : 'convert', preset: 'medium', start: 0, end: info.dur, running: false };
+  try { purl = URL.createObjectURL(file); } catch (e) { }
+  const result = await modal(`<h3>Video tools</h3><div class="meta-line">${codecName(info.vcodec)} · ${info.w}×${info.h} · ${fmt(info.dur)} · ${bytes(it.size)}</div>
+    <div class="vt-prev">${thumbs.get(it.id) ? `<img class="vt-poster" alt="" src="${thumbs.get(it.id)}">` : `<span class="vt-nopv">${IC.film}</span>`}<video id="vtVid" muted playsinline preload="metadata"></video><span class="vt-at" id="vtAt"></span></div>
+    <div class="chips seg vt-mode" id="vtMode" role="radiogroup" aria-label="What to do"><button class="chip" data-m="convert" role="radio">Convert to MP4</button><button class="chip" data-m="compress" role="radio">Compress</button></div>
+    <div class="chips seg mini vt-pre" id="vtPre" role="radiogroup" aria-label="Quality">${Object.entries(VT.PRESETS).map(([k, p]) => `<button class="chip" data-p="${k}" role="radio">${p.label}</button>`).join('')}</div>
+    <span class="lbl">Trim <small style="color:var(--dim);text-transform:none;letter-spacing:0">· drag the handles</small></span>
+    <div class="vt-trim" id="vtTrim"><div class="vt-track"><div class="vt-sel" id="vtSel"></div><button class="vt-h" id="vtHs" aria-label="Start" role="slider"></button><button class="vt-h" id="vtHe" aria-label="End" role="slider"></button></div>
+      <div class="vt-times"><span id="vtS">0:00</span><span id="vtLen"></span><span id="vtE"></span></div></div>
+    <div class="vt-est" id="vtEst"></div>
+    <div class="vt-run" id="vtRun" hidden><div class="vt-bar"><i id="vtBar"></i></div><span id="vtPct">Starting…</span></div>
+    <p class="sub-note vt-note">${IC.lock}Saved as a new encrypted copy. The original stays exactly as it is.</p>
+    <div class="actions"><button class="btn btn-ghost" id="vtCancel">Cancel</button><button class="btn btn-primary" id="vtGo">Save copy</button></div>`, (m, close) => {
+    const $m = q => m.querySelector(q), v = $m('#vtVid');
+    if (purl) { v.src = purl; v.addEventListener('loadeddata', () => v.classList.add('ok'), { once: true }); v.onerror = () => { v.removeAttribute('src'); }; }
+    const draw = () => {
+      m.querySelectorAll('#vtMode [data-m]').forEach(b => { b.classList.toggle('on', b.dataset.m === st.mode); b.setAttribute('aria-checked', String(b.dataset.m === st.mode)); });
+      m.querySelectorAll('#vtPre [data-p]').forEach(b => { b.classList.toggle('on', b.dataset.p === st.preset); b.setAttribute('aria-checked', String(b.dataset.p === st.preset)); });
+      $m('#vtPre').hidden = st.mode !== 'compress';
+      const a = st.start / info.dur * 100, b = st.end / info.dur * 100;
+      $m('#vtHs').style.left = a + '%'; $m('#vtHe').style.left = b + '%'; $m('#vtSel').style.left = a + '%'; $m('#vtSel').style.width = (b - a) + '%';
+      $m('#vtS').textContent = fmt(st.start); $m('#vtE').textContent = fmt(st.end); $m('#vtLen').textContent = fmt(st.end - st.start) + ' long';
+      $m('#vtHs').setAttribute('aria-valuetext', fmt(st.start)); $m('#vtHe').setAttribute('aria-valuetext', fmt(st.end));
+      const p = VT.plan(info, st); st.plan = p;
+      $m('#vtEst').innerHTML = `${IC.disk}<span>About <b>${bytes(p.est)}</b> · H.264 MP4 · ${p.w}×${p.h}${p.copy ? ' · quick, no quality loss' : ''}${!p.copy && st.mode === 'compress' ? ' · ' + VT.PRESETS[st.preset].note : ''}</span>`;
+      $m('#vtGo').disabled = st.running || p.est > VT.LIMIT_OUT;
+      if (p.est > VT.LIMIT_OUT) $m('#vtEst').innerHTML += `<em>Too large for this device. Choose Compress or trim it.</em>`;
+      else if (st.mode === 'compress' && !p.trimmed && p.est >= it.size * 0.95) $m('#vtEst').innerHTML += `<em class="soft">This video is already small, so compressing won’t save space.</em>`;
+    };
+    $m('#vtMode').onclick = e => { const b = e.target.closest('[data-m]'); if (!b || st.running) return; st.mode = b.dataset.m; UI.haptic(); draw(); };
+    $m('#vtPre').onclick = e => { const b = e.target.closest('[data-p]'); if (!b || st.running) return; st.preset = b.dataset.p; UI.haptic(); draw(); };
+    const track = $m('.vt-track'), MIN = Math.min(1, info.dur / 2);
+    const drag = (h, which) => { h.addEventListener('pointerdown', e => { if (st.running) return; e.preventDefault(); e.stopPropagation(); try { h.setPointerCapture(e.pointerId); } catch (_) { } h.classList.add('drag');
+      const mv = ev => { const r = track.getBoundingClientRect(), t = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * info.dur;
+        if (which === 's') st.start = Math.max(0, Math.min(t, st.end - MIN)); else st.end = Math.min(info.dur, Math.max(t, st.start + MIN));
+        if (v.classList.contains('ok')) { try { v.currentTime = which === 's' ? st.start : st.end; } catch (_) { } } const at = $m('#vtAt'); at.textContent = (which === 's' ? 'Start ' : 'End ') + fmt(which === 's' ? st.start : st.end); at.classList.add('show'); clearTimeout(at._t); at._t = setTimeout(() => at.classList.remove('show'), 1200); draw(); };
+      const up = () => { h.classList.remove('drag'); h.removeEventListener('pointermove', mv); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up); };
+      h.addEventListener('pointermove', mv); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up); });
+      h.addEventListener('keydown', e => { const d = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0; if (!d || st.running) return; e.preventDefault();
+        if (which === 's') st.start = Math.max(0, Math.min(st.start + d, st.end - MIN)); else st.end = Math.min(info.dur, Math.max(st.end + d, st.start + MIN)); draw(); }); };
+    drag($m('#vtHs'), 's'); drag($m('#vtHe'), 'e');
+    $m('#vtCancel').onclick = () => { if (st.running) { VT.cancel(); } else close(undefined); };
+    $m('#vtGo').onclick = async () => {
+      if (st.running) return; st.running = true; draw(); m.classList.add('busy');
+      $m('#vtRun').hidden = false; $m('#vtCancel').textContent = 'Stop'; const t0 = Date.now();
+      try {
+        const out = await VT.exec(file, file.name, st.plan, f => { $m('#vtBar').style.width = (f * 100) + '%'; const el = (Date.now() - t0) / 1000, left = f > 0.03 ? el / f - el : 0; $m('#vtPct').textContent = `${Math.round(f * 100)}%${left > 2 ? ' · about ' + fmt(left) + ' left' : ''}`; });
+        $m('#vtPct').textContent = 'Encrypting & saving…'; $m('#vtBar').style.width = '100%';
+        const label = st.mode === 'compress' ? VT.PRESETS[st.preset].label : 'MP4';
+        const copy = await saveVideoCopy(it, out, (st.plan.trimmed ? 'Trimmed · ' : '') + label, { w: st.plan.w, h: st.plan.h, dur: st.plan.dur, op: st.mode + (st.plan.trimmed ? '+trim' : '') });
+        close({ copy, was: it.size });
+      } catch (e) {
+        st.running = false; m.classList.remove('busy'); $m('#vtRun').hidden = true; $m('#vtCancel').textContent = 'Cancel'; draw();
+        if (e.cancelled) toast('Stopped. Nothing was saved'); else toast('Couldn’t convert: ' + e.message, 6000);
+      }
+    };
+    draw();
+  }, { cls: 'tall vtools' });
+  if (VT.busy()) VT.cancel();   // sheet dismissed mid-way
+  if (purl) URL.revokeObjectURL(purl);
+  if (result && result.copy) toast(`Saved “${result.copy.title}” · ${bytes(result.copy.size)} (was ${bytes(result.was)})`, 4500);
+}
+async function saveVideoCopy(src, blob, label, meta) {
+  if (!blob.size) throw new Error('the result is empty');
+  const id = uid(), res = await Store.putFile(id, blob);
+  let th = null; try { th = await withTimeout(Thumbs.videoThumb(new File([blob], 'copy.mp4', { type: 'video/mp4' }), 'video/mp4'), 20000); } catch (e) { }
+  let thumb = null;
+  if (th && th.blob) { const tr = await Store.putFile(id + '_t', th.blob); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
+  else if (src.thumb) { const tb = await Store.readFile(src.thumb.id, src.thumb.chunks, 'image/jpeg'); const tr = await Store.putFile(id + '_t', tb); thumb = { id: id + '_t', chunks: tr.chunks, stored: tr.stored }; }
+  const title = `${src.title} · ${label}`.slice(0, 80);
+  const it = { id, type: 'video', title, name: title.replace(/[\\/:*?"<>|]/g, '_') + '.mp4', ext: 'mp4', mime: 'video/mp4', size: blob.size, chunks: res.chunks, stored: res.stored, added: Date.now(), modified: Date.now(), taken: src.taken || null,
+    tags: (src.tags || []).slice(), fav: false, cols: (src.cols || []).filter(c => colById(c)), vault: !!src.vault, thumb, ar: meta.w / meta.h, dur: meta.dur, w: meta.w, h: meta.h, codec: 'avc1', thumbT: null, from: { id: src.id, op: meta.op } };
   idx.items.push(it); await save(); render(); startAI(); return it;
 }
 
@@ -2031,10 +2321,15 @@ async function builtinMenu(t) {
 }
 
 /* ---------- backup / restore ---------- */
-async function exportBackup() {
+function backupFiles() {
   const files = []; idx.items.forEach(i => { files.push({ id: i.id, n: i.chunks }); if (i.thumb) files.push({ id: i.thumb.id, n: i.thumb.chunks }); if (i.chap && i.chap.file) files.push({ id: i.chap.file.id, n: i.chap.file.chunks }); });
   const aif = idx.settings.ai && idx.settings.ai.file; if (aif) files.push({ id: aif.id, n: aif.chunks });
   const pff = idx.settings.faces && idx.settings.faces.file; if (pff) files.push({ id: pff.id, n: pff.chunks });
+  for (const k of ['speech', 'ocr']) { const f = idx.settings[k] && idx.settings[k].file; if (f) files.push({ id: f.id, n: f.chunks }); }
+  return files;
+}
+async function exportBackup() {
+  const files = backupFiles();
   const total = idx.items.reduce((a, i) => a + (i.stored || 0) + ((i.thumb && i.thumb.stored) || 0), 0);
   const name = `velvet-backup-${new Date().toISOString().slice(0, 10)}.velvet`;
   if (!(await confirmBox('Export encrypted backup', `This creates <b>${esc(name)}</b> (about ${bytes(total)}). It’s encrypted with your current passcode, so you’ll need that passcode to restore it on any device.`, 'Export'))) return;
@@ -2107,4 +2402,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

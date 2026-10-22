@@ -1,0 +1,55 @@
+{
+ "v": 1,
+ "addons": {
+  "video": {
+   "files": [
+    "addons/ffmpeg/ffmpeg-core.js",
+    "addons/ffmpeg/ffmpeg-core.wasm"
+   ]
+  },
+  "speech": {
+   "files": [
+    "addons/whisper/onnx-community/whisper-tiny/config.json",
+    "addons/whisper/onnx-community/whisper-tiny/generation_config.json",
+    "addons/whisper/onnx-community/whisper-tiny/preprocessor_config.json",
+    "addons/whisper/onnx-community/whisper-tiny/tokenizer.json",
+    "addons/whisper/onnx-community/whisper-tiny/tokenizer_config.json",
+    "addons/whisper/onnx-community/whisper-tiny/onnx/encoder_model_quantized.onnx",
+    "addons/whisper/onnx-community/whisper-tiny/onnx/decoder_model_merged_quantized.onnx",
+    "js/vendor/transformers/transformers.min.js",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs",
+    "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm"
+   ]
+  },
+  "ocr": {
+   "files": [
+    "addons/ocr/tesseract.esm.min.js",
+    "addons/ocr/worker.min.js",
+    "addons/ocr/core/tesseract-core-lstm.wasm.js",
+    "addons/ocr/core/tesseract-core-simd-lstm.wasm.js",
+    "addons/ocr/core/tesseract-core-relaxedsimd-lstm.wasm.js",
+    "addons/ocr/lang/eng.traineddata.gz"
+   ]
+  }
+ },
+ "sizes": {
+  "addons/ffmpeg/ffmpeg-core.js": 86527,
+  "addons/ffmpeg/ffmpeg-core.wasm": 7188235,
+  "addons/whisper/onnx-community/whisper-tiny/config.json": 2243,
+  "addons/whisper/onnx-community/whisper-tiny/generation_config.json": 3772,
+  "addons/whisper/onnx-community/whisper-tiny/preprocessor_config.json": 339,
+  "addons/whisper/onnx-community/whisper-tiny/tokenizer.json": 2480466,
+  "addons/whisper/onnx-community/whisper-tiny/tokenizer_config.json": 282683,
+  "addons/whisper/onnx-community/whisper-tiny/onnx/encoder_model_quantized.onnx": 10124990,
+  "addons/whisper/onnx-community/whisper-tiny/onnx/decoder_model_merged_quantized.onnx": 30719241,
+  "js/vendor/transformers/transformers.min.js": 586209,
+  "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.mjs": 53057,
+  "js/vendor/transformers/ort-wasm-simd-threaded.asyncify.wasm": 26861777,
+  "addons/ocr/tesseract.esm.min.js": 63220,
+  "addons/ocr/worker.min.js": 111307,
+  "addons/ocr/core/tesseract-core-lstm.wasm.js": 3896484,
+  "addons/ocr/core/tesseract-core-simd-lstm.wasm.js": 3899472,
+  "addons/ocr/core/tesseract-core-relaxedsimd-lstm.wasm.js": 3905767,
+  "addons/ocr/lang/eng.traineddata.gz": 2952873
+ }
+}

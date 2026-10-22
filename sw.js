@@ -1,10 +1,13 @@
 // Velvet service worker: caches the app shell so Velvet opens fully offline.
 // It never sees your photos/videos (those live encrypted in IndexedDB and are decrypted in the page).
-const VERSION = 'velvet-v10';
+const VERSION = 'velvet-v11';
 // AI model + runtime (~93 MB) live in their own cache so app updates don't re-download them
 const MODELS = 'velvet-ai-v1';
 const isModel = p => p.includes('/models/') || p.includes('/js/vendor/transformers/');
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'css/ios.css', 'js/app.js', 'js/ios.js', 'js/ctags.js', 'js/dedupe.js', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/people.js', 'media/probe.mp4', 'js/ai.js', 'js/ai-worker.js',
+// v1.7 add-ons (video tools, speech search, text in photos): fetched only when first used, then kept for offline use
+const ADDONS = 'velvet-addons-v1';
+const isAddon = p => p.includes('/addons/') && !p.endsWith('/addons/manifest.json');
+const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'css/fonts.css', 'css/base.css', 'css/app.css', 'css/ios.css', 'js/app.js', 'js/ios.js', 'js/ctags.js', 'js/dedupe.js', 'js/addons.js', 'js/textidx.js', 'js/vtools.js', 'js/ffmpeg-worker.js', 'js/speech.js', 'js/speech-worker.js', 'js/ocr.js', 'addons/manifest.json', 'js/store.js', 'js/thumbs.js', 'js/vision.js', 'js/smart.js', 'js/scenes.js', 'js/people.js', 'media/probe.mp4', 'js/ai.js', 'js/ai-worker.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/favicon.png',
   'fonts/GreatVibes-normal-400.woff2', 'fonts/Inter-normal-300.woff2', 'fonts/Inter-normal-400.woff2', 'fonts/Inter-normal-500.woff2', 'fonts/Inter-normal-600.woff2',
   'fonts/PlayfairDisplay-italic-400.woff2', 'fonts/PlayfairDisplay-italic-500.woff2', 'fonts/PlayfairDisplay-normal-500.woff2'];
@@ -15,7 +18,7 @@ self.addEventListener('install', e => {
     .then(() => fetch(new Request('js/vendor/libheif.js', { cache: 'reload' })).then(r => r.ok && c.put('js/vendor/libheif.js', r)).catch(() => { })))
     .then(() => self.skipWaiting()));
 });
-self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION && k !== MODELS).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION && k !== MODELS && k !== ADDONS).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('message', e => { if (e.data && e.data.type === 'version' && e.ports[0]) e.ports[0].postMessage({ version: VERSION }); });
 // network-first (revalidated against the server, so updates always win) with a fast fallback to the cache offline
 function fresh(req, key) {
@@ -29,6 +32,8 @@ function fresh(req, key) {
 }
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url); if (e.request.method !== 'GET' || u.origin !== location.origin) return;
+  if (isAddon(u.pathname)) { e.respondWith(caches.open(ADDONS).then(c => c.match(e.request, { ignoreSearch: true }).then(r => r || fetch(e.request).then(res => { if (res.ok && res.status === 200) c.put(e.request, res.clone()); return res; })))); return; }
+  if (u.pathname.endsWith('/addons/manifest.json')) { e.respondWith(fresh(e.request)); return; }
   if (isModel(u.pathname)) { e.respondWith(caches.open(MODELS).then(c => c.match(e.request, { ignoreSearch: true }).then(r => r || fetch(e.request).then(res => { if (res.ok && res.status === 200) c.put(e.request, res.clone()); return res; })))); return; }
   if (e.request.mode === 'navigate') { e.respondWith(fresh(e.request, 'index.html')); return; }
   if (/\.(js|css|webmanifest|html)$/.test(u.pathname)) { e.respondWith(fresh(e.request)); return; }

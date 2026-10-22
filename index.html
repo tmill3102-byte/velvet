@@ -70,6 +70,7 @@
         <div class="sub-h">Browse by tag</div>
         <div class="chips" id="tags"></div>
       </div>
+      <div id="saidRes"></div>
       <div class="sub-h" id="resH">Results</div>
       <div class="grid" id="results"></div>
     </section>
@@ -147,6 +148,7 @@
     <button class="skip" id="plFwd" aria-label="Forward 10 seconds"><span data-ic="fwd"></span><b>10</b></button>
   </div>
   <div class="pl-msg" id="plMsg"></div>
+  <div class="pl-sub" id="plSub" aria-live="off"></div>
   <div class="pl-ui pl-bottom">
     <div class="prog" id="prog"><div class="track"><div class="buf" id="buf"></div><div class="fill" id="fill"></div></div><div class="knob" id="knob"></div><div class="tip" id="tip">0:00</div><div class="chmarks" id="chMarks"></div></div>
     <div class="pl-times"><span id="tCur">0:00</span><span id="chNow"></span><span id="tLeft">0:00</span></div>
@@ -157,6 +159,7 @@
       <button class="cbtn" id="cFwd" aria-label="Forward 10s"><span data-ic="fwd"></span><b>10</b></button>
       <button class="cbtn" id="cSpeed" aria-label="Playback speed">1x</button>
       <button class="cbtn" id="cMute" aria-label="Mute"><span data-ic="vol"></span></button>
+      <button class="cbtn cc" id="cCC" aria-label="Subtitles" aria-pressed="false" title="Subtitles"><span data-ic="cc"></span></button>
       <button class="cbtn lbl" id="cChap" aria-label="Chapters" title="Chapters"><span data-ic="chap"></span><i class="cbadge" id="chBadge"></i><em>Chapters</em></button><button class="cbtn lbl" id="cReel" aria-label="Highlights" title="Highlight reel"><span data-ic="reel"></span><em>Highlights</em></button><button class="cbtn lbl" id="cFav" aria-label="Favorite"><span data-ic="heart"></span><em>Favorite</em></button><button class="cbtn lbl" id="plThumb" aria-label="Use this frame as the preview" title="Use this frame as the preview"><span data-ic="photo"></span><em>Set cover</em></button>
       <button class="cbtn" id="cFull" aria-label="Fullscreen"><span data-ic="full"></span></button>
     </div>

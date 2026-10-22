@@ -1,0 +1,15 @@
+Velvet video tools add-on: FFmpeg compiled to WebAssembly, built by Velvet without GPL or non-free parts.
+
+- FFmpeg n5.1.4 - https://ffmpeg.org - licensed under the GNU Lesser General Public License 2.1 or later
+  (COPYING.LGPLv2.1.txt). Configured with --disable-everything plus only the parts Velvet uses, and without
+  --enable-gpl / --enable-nonfree / --enable-version3 (configure reports: !CONFIG_GPL, !CONFIG_NONFREE, !CONFIG_VERSION3).
+  Source: https://github.com/FFmpeg/FFmpeg/tree/n5.1.4 (unmodified).
+- OpenH264 v2.4.1 (Cisco), BSD 2-Clause (LICENSE-openh264.txt), used for H.264 encoding. Built from source:
+  https://github.com/cisco/openh264/tree/v2.4.1 (only the -fstack-protector-all compiler flag is removed for WebAssembly).
+  Note: Cisco's patent licence covers only Cisco's own binaries; this build is compiled from source.
+- ffmpeg.wasm v0.12.10 glue (src/bind, src/fftools as in the ffmpeg.wasm project), MIT (LICENSE-ffmpeg.wasm.txt):
+  https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10
+- Toolchain: Emscripten 3.1.40.
+
+How to rebuild (and to relink with a modified FFmpeg, as the LGPL allows): see build-ffmpeg-lgpl.sh in this folder.
+"mt/" holds the multithreaded build used only by the Windows app (same sources, built with -pthread).

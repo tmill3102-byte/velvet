@@ -42,3 +42,10 @@ Your photos and videos never leave your device. They're encrypted (AES-256-GCM) 
 - **custom AI tags**: name a tag, describe it, show a few example photos ("like this" / "not this"), and the on-device AI applies it. Each tag gets its own auto album, works in Search and rules, and learns from "Is this …?" answers. Built-in tags can be renamed, hidden or merged;
 - **no more doubles**: files already in Velvet (including the Vault and the Archive) are recognised by content and skipped on import;
 - **folder sync** in the Windows app: *Check for new files* on a folder collection, optionally each time Velvet opens. Velvet only reads the folder, never changes it.
+
+**New in v1.7:** three optional on-device add-ons. Each one is downloaded from this site only the first time you use it, then cached for offline use. The Windows app already includes them.
+- **Video tools** (≈7 MB): convert HEVC/MOV to H.264 MP4, compress (Small, Medium or High, with an estimated size), and trim with start and end handles. The result is saved as a new encrypted copy. Uses FFmpeg 5.1 (LGPL-2.1 build, no GPL parts) and OpenH264 (BSD), see `addons/ffmpeg/`.
+- **Speech search** (≈68 MB, or ≈44 MB if On-device AI is already on): find videos by what's said, jump straight to that moment, and show subtitles (CC) in the player. Uses Whisper tiny (Apache-2.0), see `addons/whisper/`.
+- **Text in photos** (≈7 MB): find photos and screenshots by the text in them. Details shows "Text found" with *Copy text*. Uses Tesseract (Apache-2.0), see `addons/ocr/`.
+
+Turn them on in Profile → On-device AI. Transcripts and found text are stored encrypted and included in backups. Nothing is ever uploaded.

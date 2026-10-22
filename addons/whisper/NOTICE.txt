@@ -1,0 +1,7 @@
+Velvet speech-search add-on (on-device transcription). All files are served from Velvet's own site; nothing is sent anywhere.
+
+- Whisper tiny (multilingual) by OpenAI, Apache-2.0 - https://huggingface.co/openai/whisper-tiny
+- ONNX export, 8-bit quantized: onnx-community/whisper-tiny (Apache-2.0) - https://huggingface.co/onnx-community/whisper-tiny
+  files: onnx/encoder_model_quantized.onnx, onnx/decoder_model_merged_quantized.onnx, config/tokenizer JSON
+- Runs with Transformers.js + ONNX Runtime Web (Apache-2.0 / MIT), already part of Velvet's on-device AI (js/vendor/transformers).
+LICENSE.txt contains the Apache License 2.0 text.

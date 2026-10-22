@@ -1,0 +1,19 @@
+Velvet text-in-photos add-on (on-device OCR). All files are served from Velvet's own site; nothing is sent anywhere.
+
+- tesseract.js 7.0.0 (Apache-2.0) - https://github.com/naptha/tesseract.js : tesseract.esm.min.js, worker.min.js
+- tesseract.js-core 7.0.0 (Apache-2.0; Tesseract OCR, Leptonica BSD-2) - https://github.com/naptha/tesseract.js-core : core/*.wasm.js
+- English model eng.traineddata (tessdata_best int, Apache-2.0) via @tesseract.js-data/eng 4.0.0_best_int (MIT packaging) - https://github.com/tesseract-ocr/tessdata_best
+
+Third-party notices bundled in tesseract.js:
+/*!
+ * The buffer module from node.js, for the browser.
+ *
+ * @author   Feross Aboukhadijeh <https://feross.org>
+ * @license  MIT
+ */
+
+/*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
+
+/*! regenerator-runtime -- Copyright (c) 2014-present, Facebook, Inc. -- license (MIT): https://github.com/facebook/regenerator/blob/main/LICENSE */
+
+/** @license zlib.js 2012 - imaya [ https://github.com/imaya/zlib.js ] The MIT License */
