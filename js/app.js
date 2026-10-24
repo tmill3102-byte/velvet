@@ -15,6 +15,7 @@ import * as Speech from './speech.js';
 import * as OCR from './ocr.js';
 import * as IT from './imgtools.js';
 import * as Cap from './caption.js';
+import * as VS from './vstream.js';
 const host = window.velvetHost || null; // provided by the Electron preload; null in the browser/PWA
 const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -309,7 +310,7 @@ function lockNow() { hashTok++; try { closeReel(); } catch (e) { } if (typeof ru
   $$('.modal').forEach(m => m.remove());
   txRun = 0; txProg = null; txPri = null; VT.cancel(); Speech.shutdown(); OCR.shutdown(); Cap.shutdown(); IT.cancel(); TI.close(); subs = null;
   AI.shutdown(); aiProg = null; People.shutdown(); pplProg = null; curPerson = null; drawAIChip();
-  Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
+  endStream(); VS.closeAll(); Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
   ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#tagsBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
@@ -746,7 +747,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.8.0';
+const APP_VER = '1.8.1';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -1127,7 +1128,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v12';
+const SW_VER = 'velvet-v13';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -1486,18 +1487,53 @@ function setIcon(btn, name) { const s = btn.querySelector('[data-ic]'); s.datase
 function syncFavButtons() { if (lb.classList.contains('open')) $('#lbFav').classList.toggle('on', !!(lbList[lbIdx] || {}).fav); $('#cFav').classList.toggle('on', !!(curVid && curVid.fav)); }
 async function openPlayer(it, list, startAt) {
   curVid = it; plList = (list || visible()).filter(x => x.type === 'video'); const tok = ++plTok;
-  pl.classList.add('open', 'loading'); pl.classList.remove('idle');
+  endStream(); plStat = { id: it.id, mode: '', t0: performance.now(), meta: null, frame: null, fallback: null };
+  pl.classList.add('open', 'loading'); pl.classList.remove('idle'); $('#plMsg').classList.remove('show'); clearTimeout(flashT);
   $('#plTitle').textContent = it.title; $('#fill').style.width = '0%'; $('#knob').style.left = '0%'; $('#buf').style.width = '0%';
   vid.removeAttribute('src'); vid.load(); vid.poster = thumbs.get(it.id) || '';
   renderRelated(); syncFavButtons(); wake(); updProg();
+  // v1.8.1: stream (decrypt only the chunks the player asks for) unless this page can't, or it's already decrypted in memory
+  if (!fulls.has(it.id) && VS.available()) playStream(it, tok, startAt); else playBlob(it, tok, startAt);
+}
+const vidType = it => it.mime === 'video/quicktime' && !isIOS ? 'video/mp4' : it.mime;
+function startVid(it, u, tok, startAt) {
+  vid.src = u; if (startAt > 0) { const go = () => { try { vid.currentTime = Math.max(0, startAt - 0.3); } catch (e) { } }; if (vid.readyState >= 1) go(); else vid.addEventListener('loadedmetadata', go, { once: true }); }
+  if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(() => { if (tok === plTok && plStat && plStat.frame == null) { plStat.frame = performance.now() - plStat.t0; pl.classList.remove('loading'); } });
+  loadSubs(it); playerChapters(it, u, tok); vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
+}
+// the old path (and automatic fallback): decrypt the whole file into memory first
+async function playBlob(it, tok, startAt) {
+  plStat.mode = plStat.mode ? plStat.mode + '>blob' : 'blob';
   try {
     const u = await getFull(it, p => { if (tok === plTok) flash('Decrypting ' + Math.round(p * 100) + '%', true); });
     if (tok !== plTok) return; $('#plMsg').classList.remove('show');
-    vid.src = u; if (startAt > 0) { const go = () => { try { vid.currentTime = Math.max(0, startAt - 0.3); } catch (e) { } }; if (vid.readyState >= 1) go(); else vid.addEventListener('loadedmetadata', go, { once: true }); }
-    loadSubs(it); playerChapters(it, u, tok); vid.playbackRate = SPEEDS[speedI]; const p = vid.play(); if (p && p.catch) p.catch(() => { pl.classList.remove('loading'); syncPlay(); });
+    startVid(it, u, tok, startAt);
   } catch (e) { if (tok === plTok) { pl.classList.remove('loading'); flash('Can’t open this video: ' + e.message); } }
 }
-function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; subs = null; drawSub(); clearChapters(); vid.pause(); vid.removeAttribute('src'); vid.load(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
+let vsCur = null;   // { token, tok, it, timer }
+function playStream(it, tok, startAt) {
+  const s = VS.open(it, vidType(it)); plStat.mode = 'stream';
+  vsCur = { token: s.token, tok, it, info: s.info, timer: setTimeout(() => { if (vsCur && vsCur.token === s.token && vid.readyState < 1) streamFailed('no data after 20 s'); }, 20000) };
+  startVid(it, s.url, tok, startAt);
+}
+function endStream() { if (!vsCur) return; clearTimeout(vsCur.timer); VS.close(vsCur.token); vsCur = null; }
+function streamFailed(why) {
+  const c = vsCur; if (!c || c.tok !== plTok) return;
+  const t = vid.currentTime || 0; console.warn('streaming failed, decrypting the whole video instead:', why);
+  endStream(); plStat.fallback = why; vid.removeAttribute('src'); vid.load(); playBlob(c.it, c.tok, t);
+}
+vid.addEventListener('error', () => {
+  if (!vsCur || vsCur.tok !== plTok) return;
+  const e = vid.error, info = vsCur.info && vsCur.info();
+  // fall back when the stream itself failed (no SW answer, Private Browsing, network-type error). If bytes did arrive and
+  // the browser says it can't decode them, decrypting the whole file wouldn't help, so don't spend the time.
+  if ((e && e.code === 2) || !info || !info.reads) streamFailed('media error ' + (e ? e.code : '?'));
+  else { clearTimeout(vsCur.timer); pl.classList.remove('loading'); flash('This video can’t be played on this device (format not supported).'); }
+});
+vid.addEventListener('loadedmetadata', () => { if (plStat && plStat.meta == null) plStat.meta = performance.now() - plStat.t0; });
+vid.addEventListener('loadeddata', () => { if (plStat && plStat.data == null) { plStat.data = performance.now() - plStat.t0; if (!vid.videoWidth && curVid && curVid.type === 'video') { plStat.noVideo = true; flash('This device can’t show this video’s picture (format not supported), only its sound.', true); } } if (plStat && plStat.frame == null && !vid.requestVideoFrameCallback) plStat.frame = plStat.data; });
+let plStat = null;
+function closePlayer() { if (!pl.classList.contains('open')) return; plTok++; subs = null; drawSub(); clearChapters(); vid.pause(); vid.removeAttribute('src'); vid.load(); endStream(); pl.classList.remove('open', 'idle'); if (document.fullscreenElement) document.exitFullscreen().catch(() => { }); curVid = null; }
 function renderRelated() {
   const vids = plList.length > 1 ? plList : (curVid && curVid.vault ? idx.items.filter(i => i.vault && i.type === 'video') : visible().filter(i => i.type === 'video'));
   $('#rel').innerHTML = vids.slice(0, 30).map(v => `<div class="rel-item ${v === curVid ? 'cur' : ''}" data-id="${v.id}" style="--fb:${fbFor(v.id)}"><img alt="" data-tid="${v.id}"><div class="shade"></div><span class="t">${esc(v.title)}</span><span class="dur">${fmt(v.dur)}</span></div>`).join('');
@@ -2576,4 +2612,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, IT, Cap, photoTools, savePhotoCopy, capOn, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { VS, get plStat() { return plStat; }, get vsToken() { return vsCur && vsCur.token; }, openPlayer, closePlayer, itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, IT, Cap, photoTools, savePhotoCopy, capOn, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

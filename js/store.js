@@ -114,6 +114,13 @@ export function rangeReader(id, n, size) {
     },
   };
 }
+// v1.8.1 streaming playback: decrypt one 1 MiB chunk of a stored file (throws when locked)
+export async function readChunk(id, i) {
+  if (!dek) throw new Error('locked');
+  const rec = await req(db.transaction('chunks').objectStore('chunks').get([id, i]));
+  if (!rec) throw new Error('Missing data for ' + id);
+  return new Uint8Array(await dec(dek, rec, id + ':' + i));
+}
 export async function deleteFile(id) {
   await open(); const t = db.transaction('chunks', 'readwrite');
   t.objectStore('chunks').delete(IDBKeyRange.bound([id, 0], [id, Infinity])); return txDone(t);
