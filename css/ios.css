@@ -586,3 +586,18 @@ html,body{overflow-x:clip}
 @media (prefers-reduced-motion:reduce){.vt-bar.ind i{animation:none;width:100%!important;opacity:.5}.cmp img{transition:none}}
 textarea.field.desc{height:auto;min-height:64px;padding:10px 12px;line-height:1.35;resize:vertical;width:100%;color:inherit}
 .vt-est>span{flex:1 1 0;min-width:0}
+
+/* ---------- v1.8.2 full screen photos (tap to hide everything, like iOS Photos) ---------- */
+#lightbox{touch-action:none;transition:background-color .3s}
+#lightbox .lb-top,#lightbox .lb-tags,#lightbox .lb-nav{transition:opacity .3s,transform .3s}
+#lightbox.bare{background:#000;backdrop-filter:none;-webkit-backdrop-filter:none}
+#lightbox.bare .lb-top{transform:translateY(-8px)}
+#lightbox.bare .lb-tags{transform:translateY(8px)}
+#lightbox.bare .lb-stage{position:absolute;inset:0;max-width:none;max-height:none;box-sizing:border-box;padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+#lightbox.bare .lb-stage img{max-width:calc(100vw - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));max-height:calc(100vh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));max-height:calc(100dvh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px));border-radius:0;box-shadow:none}
+#lightbox.bare .lb-stage .tint{border-radius:0}
+#lightbox.bare,#lightbox.slide{cursor:none}
+#lightbox.zoomed{cursor:grab}
+#lightbox.zoomed .lb-stage img{will-change:transform}
+#lightbox:fullscreen{background:#000}
+#lbFull svg{width:20px;height:20px}

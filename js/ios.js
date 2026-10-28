@@ -114,7 +114,9 @@ export function swipeDown(el, { onClose, ignore }) {
   let y0 = null, x0 = 0, dy = 0, decided = false, t0 = 0;
   el.addEventListener('touchstart', e => { if (e.touches.length !== 1 || (ignore && ignore(e))) return; y0 = e.touches[0].clientY; x0 = e.touches[0].clientX; dy = 0; decided = false; t0 = performance.now(); }, { passive: true });
   el.addEventListener('touchmove', e => {
-    if (y0 == null) return; const t = e.touches[0]; dy = t.clientY - y0; const dx = t.clientX - x0;
+    if (y0 == null) return;
+    if (e.touches.length > 1) { if (decided) { el.style.transition = ''; el.style.transform = ''; el.style.removeProperty('--fade'); } y0 = null; return; }   // a second finger = pinch, not a swipe
+    const t = e.touches[0]; dy = t.clientY - y0; const dx = t.clientX - x0;
     if (!decided) { if (Math.abs(dy) < 10 && Math.abs(dx) < 10) return; decided = true; if (Math.abs(dx) > Math.abs(dy) || dy < 0) { y0 = null; return; } }
     if (e.cancelable) e.preventDefault();
     const s = clamp(1 - dy / 1600, .85, 1); el.style.transition = 'none'; el.style.transform = `translateY(${Math.max(0, dy)}px) scale(${s})`; el.style.setProperty('--fade', clamp(1 - dy / 600, .3, 1).toFixed(3));
