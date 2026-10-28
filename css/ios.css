@@ -601,3 +601,28 @@ textarea.field.desc{height:auto;min-height:64px;padding:10px 12px;line-height:1.
 #lightbox.zoomed .lb-stage img{will-change:transform}
 #lightbox:fullscreen{background:#000}
 #lbFull svg{width:20px;height:20px}
+
+/* v1.8.3: the photo always fills the screen (fitted, never cropped). Before, the picture was only *limited* to the
+   screen (max-width/max-height), so anything smaller than the screen — the preview while the full photo decrypts,
+   small or downscaled photos — stayed small in the middle. Now the picture box is the whole screen and the photo is
+   fitted inside it with object-fit:contain, in portrait, landscape, the home-screen app and real full screen. */
+#lightbox .lb-stage{position:absolute;inset:0;width:auto;height:auto;max-width:none;max-height:none;box-sizing:border-box;display:grid;place-items:center;
+  padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
+#lightbox .lb-stage img,#lightbox.bare .lb-stage img{display:block;width:100%;height:100%;max-width:none;max-height:none;min-width:0;min-height:0;object-fit:contain;border-radius:0;box-shadow:none}
+#lightbox .lb-stage .tint{display:none}
+#lightbox .lb-top{z-index:2}
+#lightbox .lb-nav{z-index:2}
+#lightbox .lb-tags{z-index:2;bottom:calc(14px + env(safe-area-inset-bottom,0px))}
+.lb-top #lbPlay [data-ic]{transform:scale(.86)}
+/* slideshow controls: shown with the bars while a slideshow plays */
+.lb-slide{position:absolute;z-index:3;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:none;align-items:center;gap:6px;padding:6px 8px;border-radius:999px;
+  background:rgba(20,6,12,.78);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid rgba(255,90,150,.22);transition:opacity .3s,transform .3s;white-space:nowrap}
+#lightbox.slide .lb-slide{display:flex}
+#lightbox.slide .lb-tags{display:none}
+#lightbox.bare .lb-slide{opacity:0;pointer-events:none;transform:translate(-50%,8px)}
+.lb-spd{display:flex;gap:2px;background:rgba(255,255,255,.06);border-radius:999px;padding:2px}
+.lb-spd button,.lb-chip{font:inherit;font-size:13px;color:#F3C7D4;background:none;border:0;border-radius:999px;padding:7px 10px;min-height:36px;cursor:pointer}
+.lb-spd button.on,.lb-chip.on{background:var(--mag,#FF2E88);color:#fff}
+.lb-chip{border:1px solid rgba(255,90,150,.25)}
+.lb-ver{margin-top:10px;opacity:.6;font-size:12px}
+#lightbox.fs{background:#000;backdrop-filter:none;-webkit-backdrop-filter:none}

@@ -541,8 +541,9 @@ function renderCollection() {
   const n = colItems(c).length;
   h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div class="hero-fade"></div>
     <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private${c.src && host ? ` · ${IC.folder}From a folder${c.src.auto ? ', checked when Velvet opens' : ''}${c.src.last ? ` · checked ${ago(c.src.last)}` : ''}` : ''}</p></div>
-    <div class="hero-actions">${c.src && host && host.listFolder ? `<button class="btn btn-primary btn-sm" id="colSync">${IC.folder}<span>Check for new files</span></button>` : ''}${n ? `<button class="btn ${c.src && host ? 'btn-ghost' : 'btn-primary'} btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
+    <div class="hero-actions">${c.src && host && host.listFolder ? `<button class="btn btn-primary btn-sm" id="colSync">${IC.folder}<span>Check for new files</span></button>` : ''}${colItems(c).filter(x => x.type === 'photo').length > 1 ? `<button class="btn ${c.src && host ? 'btn-ghost' : 'btn-primary'} btn-sm" id="colPlay">${IC.play}<span>Play slideshow</span></button>` : ''}${n ? `<button class="btn btn-ghost btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
   hydrateCovers(h); h.classList.toggle('nocover', !coverOf(c));
+  const cp = $('#colPlay'); if (cp) cp.onclick = () => lbSlideshow(null, sortNew(colItems(c)));
   const cr = $('#colReel'); if (cr) cr.onclick = () => openReel(colItems(c), c.name);
   const cs = $('#colSync'); if (cs) cs.onclick = async () => { cs.disabled = true; await checkFolder(c); cs.disabled = false; };
   renderGrid($('#colItems'), sortNew(colItems(c)), emptyHTML('cols', 'This collection is empty', 'Add photos and videos straight into it, or choose <b>Select</b> in your Library and tap <b>Add to</b>.', `<button class="btn btn-primary" data-act="import">${IC.plus}Add photos &amp; videos</button>`));
@@ -675,7 +676,8 @@ async function renderProfile() {
     <h4 class="gh">Smart features · on this device</h4>${aiCard()}
     ${GROUP('Videos', [ROW({ ic: 'chap', t: 'Find chapters automatically', d: 'Marks scene changes when you open a video', right: SW('autoChapters', s.autoChapters !== false, 'Find chapters automatically') }),
       ROW({ ic: 'convert', c: '#C2185B', t: 'Video tools', d: 'Convert to MP4, compress or trim. Open a video, then ••• → Convert, compress or trim', did: 'vtStatus' })])}
-    ${GROUP('Photos', [ROW({ ic: 'upscale', c: '#7A4FD1', t: 'Upscale', d: 'Make a photo 2× or 4× larger and sharper. Open a photo, then ••• → Upscale' }),
+    ${GROUP('Photos', [ROW({ ic: 'full', c: '#FF2E88', t: 'Open photos full screen', d: 'Tap a photo to see it edge to edge. Tap once to show the buttons', right: SW('photosFull', s.photosFull !== false, 'Open photos full screen') }),
+      ROW({ ic: 'upscale', c: '#7A4FD1', t: 'Upscale', d: 'Make a photo 2× or 4× larger and sharper. Open a photo, then ••• → Upscale' }),
       ROW({ ic: 'cutout', c: '#C47A2C', t: 'Remove background', d: 'Cut out the subject: transparent, a color, or a blurred background. Open a photo, then ••• → Remove background' })])}
     ${addonsGroup()}
     ${GROUP('Backup', [
@@ -697,7 +699,7 @@ async function renderProfile() {
   hydrateIcons($('#profileBody'));
   const ring = $('#ring'), RC = 2 * Math.PI * 86; ring.style.strokeDasharray = RC; ring.style.strokeDashoffset = RC;
   requestAnimationFrame(() => requestAnimationFrame(() => { ring.style.strokeDashoffset = RC * (1 - Math.max(frac, libBytes ? 0.02 : 0)); }));
-  $$('#profileBody .switch[data-key]').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if (k === 'autoChapters' && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); UI.haptic(); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when you leave' : 'Lock-when-I-leave off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask' }[k]); });
+  $$('#profileBody .switch[data-key]').forEach(sw => sw.onclick = () => { const k = sw.dataset.key; if ((k === 'autoChapters' || k === 'photosFull') && s[k] === undefined) s[k] = true; s[k] = !s[k]; sw.setAttribute('aria-checked', String(s[k])); UI.haptic(); save(); resetIdle(); if (k === 'hide' && host && host.setPrivacy) host.setPrivacy(s.hide); toast({ autolock: s[k] ? `Auto-lock on (${s.autolockMin} min)` : 'Auto-lock off', lockOnHide: s[k] ? 'Velvet locks when you leave' : 'Lock-when-I-leave off', hide: s[k] ? 'Velvet blurs when it loses focus' : 'Blur off', autoChapters: s[k] ? 'Chapters are found automatically' : 'Chapters only when you ask', photosFull: s[k] ? 'Photos open full screen' : 'Photos open with buttons showing' }[k]); });
   $('#alMin').onchange = e => { s.autolockMin = +e.target.value; save(); resetIdle(); };
   $('#fitSw').onclick = async () => { const g = s.grid = s.grid || {}; g.fit = !g.fit; g.zoom = 0; $('#fitSw').setAttribute('aria-checked', String(g.fit)); UI.haptic(); await save(); toast(g.fit ? 'Showing whole photos' : 'Showing square tiles'); };
   $('#tsSeg').onclick = e => { const b = e.target.closest('[data-ts]'); if (!b) return; s.textSize = b.dataset.ts; try { localStorage.setItem('velvet.ts', s.textSize); } catch (er) { } applyTextSize(); save(); UI.haptic(); renderProfile(); };
@@ -747,7 +749,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.8.2';
+const APP_VER = '1.8.3';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -1128,7 +1130,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v14';
+const SW_VER = 'velvet-v15';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
@@ -1331,7 +1333,7 @@ async function itemSheet(it) {
       <button data-a="vault">${IC.vault}${it.vault ? 'Move back to Library' : 'Move to Vault'}</button>
       ${it.type === 'video' ? `<button data-a="vtools">${IC.convert}Convert, compress or trim…</button>` : ''}
       ${it.type === 'photo' ? `<button data-a="upscale">${IC.upscale}Upscale…</button><button data-a="bgremove">${IC.cutout}Remove background…</button>` : ''}
-      ${it.type === 'photo' && lb.classList.contains('open') ? `<button data-a="slideshow">${IC.play}Slideshow</button><button data-a="full">${IC.full}Full screen</button>` : ''}
+      ${it.type === 'photo' && lb.classList.contains('open') ? `<button data-a="slideshow">${IC.play}Slideshow</button><button data-a="full">${IC.full}Full screen</button><div class="meta-line lb-ver">Velvet ${APP_VER} · ${host ? 'Windows app' : SW_VER}</div>` : ''}
       <button data-a="export">${IC.download}Save a decrypted copy…</button>
       <button class="danger" data-a="delete">${IC.trash}Delete</button></div>
     <div class="actions"><button class="btn btn-primary" data-ok>Done</button></div>`, (m, close) => {
@@ -1462,21 +1464,29 @@ async function smartMenu() {
 
 /* ---------- lightbox ---------- */
 const lb = $('#lightbox'); let lbList = [], lbIdx = 0, lbTok = 0;
-function openLightbox(it, list) { lbList = list.length ? list : [it]; lbIdx = Math.max(0, lbList.indexOf(it)); lb.classList.add('open'); showLb(); }
+let lbAutoFs = false;
+const photosFull = () => !idx || idx.settings.photosFull !== false;     // Profile → Photos → Open photos full screen (default on)
+function openLightbox(it, list, opt = {}) {
+  lbList = list && list.length ? list : [it]; lbIdx = Math.max(0, lbList.indexOf(it)); lb.classList.add('open'); showLb();
+  lbAutoFs = !!(opt.full ?? photosFull()); if (lbAutoFs) lbFullscreen(true);   // Esc / back closes the photo again when it opened full screen by itself     // called from the tap on a thumbnail, so desktop browsers / the Windows app allow real full screen
+}
 async function showLb() {
   const it = lbList[lbIdx]; if (!it) return; const tok = ++lbTok, st = $('#lbStage'); Z.s = 1; Z.x = 0; Z.y = 0; lb.classList.remove('zoomed');
   $('#lbTitle').textContent = it.title; $('#lbCount').textContent = `${lbIdx + 1} / ${lbList.length}`;
   $('#lbTags').innerHTML = (it.tags || []).map(t => `<span>#${esc(t)}</span>`).join(''); $('#lbFav').classList.toggle('on', !!it.fav);
-  if (!fulls.has(it.id)) st.innerHTML = thumbs.has(it.id) ? `<img src="${thumbs.get(it.id)}" alt="" style="filter:blur(6px)">` : '<div class="lb-loading"></div>';
+  if (!fulls.has(it.id)) st.innerHTML = thumbs.has(it.id) ? `<img class="ph" src="${thumbs.get(it.id)}" alt="" style="filter:blur(6px)">` : '<div class="lb-loading"></div>';
   try {
     const u = await getFull(it); if (tok !== lbTok) return;
     const img = new Image(); img.alt = it.title; img.draggable = false; img.src = u; await img.decode().catch(() => { });
-    if (tok !== lbTok) return; st.innerHTML = ''; img.classList.add('swap'); st.appendChild(img); requestAnimationFrame(() => requestAnimationFrame(() => img.classList.remove('swap')));
+    // some iPhones reject decode() for big photos even though they display fine: wait for the real load before giving up
+    if (!img.naturalWidth) await new Promise(r => { if (img.complete && img.naturalWidth) return r(); img.onload = img.onerror = r; setTimeout(r, 8000); });
+    if (tok !== lbTok) return;
+    if (!img.naturalWidth) { const ph = st.querySelector('img.ph'); if (ph) { ph.style.filter = ''; toast('Couldn’t open the full-size photo, showing the preview'); return; } throw new Error('This photo couldn’t be decoded on this device'); } st.innerHTML = ''; img.classList.add('swap'); st.appendChild(img); requestAnimationFrame(() => requestAnimationFrame(() => img.classList.remove('swap'))); setTimeout(() => img.classList.remove('swap'), 250);
     const n = lbList[(lbIdx + 1) % lbList.length]; if (n && n !== it && !fulls.has(n.id)) getFull(n).catch(() => { });
   } catch (e) { if (tok === lbTok && Store.isUnlocked()) st.innerHTML = `<div class="empty"><b>Can’t show this file</b>${esc(e.message)}</div>`; }
 }
 function lbStep(d) { if (lbList.length < 2) return; lbIdx = (lbIdx + d + lbList.length) % lbList.length; showLb(); }
-function closeLightbox() { lbSlideStop(true); zReset(); lb.classList.remove('open', 'bare', 'fs', 'zoomed'); lbTok++; if (document.fullscreenElement === lb) document.exitFullscreen().catch(() => { }); syncLbFull(); }
+function closeLightbox() { lbSlideStop(true); clearTimeout(barsT); zReset(); lb.classList.remove('open', 'bare', 'fs', 'zoomed'); lbTok++; if (document.fullscreenElement === lb) document.exitFullscreen().catch(() => { }); syncLbFull(); }
 $('#lbClose').onclick = closeLightbox; $('#lbPrev').onclick = () => lbStep(-1); $('#lbNext').onclick = () => lbStep(1);
 $('#lbFav').onclick = () => { const it = lbList[lbIdx]; if (it) toggleFav(it); };
 $('#lbMore').onclick = () => itemSheet(lbList[lbIdx]);
@@ -1489,7 +1499,7 @@ $('#lbMore').onclick = () => itemSheet(lbList[lbIdx]);
      next/previous photo and swipe down to close when not zoomed; slideshow from the ••• menu */
 let lbFsLeftAt = 0;   // when the browser itself leaves full screen on Esc, that same Esc must not also close the viewer
 const fsOK = () => !!(document.fullscreenEnabled && lb.requestFullscreen);
-function lbBare(on) { lb.classList.toggle('bare', !!on); }
+function lbBare(on) { lb.classList.toggle('bare', !!on); if (on) clearTimeout(barsT); }
 function syncLbFull() { const f = lb.classList.contains('fs'); setIcon($('#lbFull'), f ? 'exitfull' : 'full'); $('#lbFull').setAttribute('aria-label', f ? 'Exit full screen' : 'Full screen'); }
 function lbFullscreen(on) {
   if (on === undefined) on = !lb.classList.contains('fs');
@@ -1497,13 +1507,15 @@ function lbFullscreen(on) {
   else { lb.classList.remove('fs'); lbBare(false); lbSlideStop(); if (document.fullscreenElement === lb) document.exitFullscreen().catch(() => { }); }
   syncLbFull();
 }
-$('#lbFull').onclick = () => lbFullscreen();
+$('#lbFull').onclick = () => { lbAutoFs = false; lbFullscreen(); };
 document.addEventListener('fullscreenchange', () => { if (document.fullscreenElement === lb && !(lb.classList.contains('fs') && lb.classList.contains('open'))) { document.exitFullscreen().catch(() => { }); return; }   // left again before the request finished
   if (document.fullscreenElement !== lb && lb.classList.contains('fs') && lb.classList.contains('open')) { lbFsLeftAt = performance.now(); lb.classList.remove('fs'); lbBare(false); lbSlideStop(); syncLbFull(); } });
 // zoom & pan
 const Z = { s: 1, x: 0, y: 0 }, ZMAX = 5;
+addEventListener('resize', () => { if (lb.classList.contains('open') && Z.s > 1.001) { zClamp(); zApply(); } });
 const lbImg = () => $('#lbStage img');
-function zClamp() { const img = lbImg(); if (!img) return; const mx = Math.max(0, (img.offsetWidth * Z.s - innerWidth) / 2), my = Math.max(0, (img.offsetHeight * Z.s - innerHeight) / 2); Z.x = Math.max(-mx, Math.min(mx, Z.x)); Z.y = Math.max(-my, Math.min(my, Z.y)); }
+function picSize(img) { const W = img.clientWidth, H = img.clientHeight, nw = img.naturalWidth || W, nh = img.naturalHeight || H, f = Math.min(W / nw, H / nh) || 1; return { w: nw * f, h: nh * f }; }
+function zClamp() { const img = lbImg(); if (!img) return; const p = picSize(img), mx = Math.max(0, (p.w * Z.s - innerWidth) / 2), my = Math.max(0, (p.h * Z.s - innerHeight) / 2); Z.x = Math.max(-mx, Math.min(mx, Z.x)); Z.y = Math.max(-my, Math.min(my, Z.y)); }
 function zApply(anim) {
   const img = lbImg(); if (!img) return; const rest = Z.s <= 1.001 && !Z.x && !Z.y;
   img.style.transition = anim ? 'transform .28s cubic-bezier(.2,.8,.2,1)' : 'none'; img.style.transform = rest ? '' : `translate(${Z.x}px,${Z.y}px) scale(${Z.s})`;
@@ -1520,13 +1532,15 @@ function zTo(s1, px, py, anim) {     // zoom to s1 keeping the screen point (px,
 const ptrs = new Map(); let g = null, lastTap = null, tapT = null;
 const dist2 = () => { const [a, b] = [...ptrs.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
 const mid2 = () => { const [a, b] = [...ptrs.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; };
+let barsT = null;
+function lbBarsAutoHide() { clearTimeout(barsT); if (!lb.classList.contains('fs') || lb.classList.contains('bare')) return; barsT = setTimeout(() => { if (lb.classList.contains('open') && lb.classList.contains('fs') && !document.querySelector('.modal')) lbBare(true); }, 3000); }
 function lbTap(e) {
-  if (lbSlideT) { lbSlideStop(); lbBare(false); return; }
   // mouse click on the dark area around the photo closes the viewer (as before), unless full screen
   if (e.pointerType === 'mouse' && e.target === lb && !lb.classList.contains('bare') && !lb.classList.contains('fs')) { closeLightbox(); return; }
-  lbBare(!lb.classList.contains('bare'));
+  lbBare(!lb.classList.contains('bare')); lbBarsAutoHide();
 }
 lb.addEventListener('pointerdown', e => {
+  if (e.target.closest('.lb-top,.lb-tags,.lb-slide')) lbBarsAutoHide();
   if (!lb.classList.contains('open') || e.target.closest('button') || (e.pointerType === 'mouse' && e.button !== 0)) return;
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY }); try { lb.setPointerCapture(e.pointerId); } catch (_) { }
   if (ptrs.size === 1) g = { m: 'tap', sx: e.clientX, sy: e.clientY, x0: Z.x, y0: Z.y, t: performance.now(), type: e.pointerType, target: e.target };
@@ -1553,7 +1567,7 @@ function lbUp(e) {
   if (ptrs.size) return; const m = g; g = null; if (e.type === 'pointercancel') return;
   const dx = p.x - m.sx, dy = p.y - m.sy;
   if (m.m === 'swipe') {
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { lbStep(dx < 0 ? 1 : -1); if (lbSlideT) lbSlideNext(); }
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) { lbStep(dx < 0 ? 1 : -1); if (SL.on) lbSlideNext(); }
     else if (dy > 90 && m.type === 'mouse') closeLightbox();      // touch swipe-down is handled (with the drag effect) by UI.swipeDown
     return;
   }
@@ -1571,15 +1585,29 @@ lb.addEventListener('pointerup', lbUp); lb.addEventListener('pointercancel', lbU
 lb.addEventListener('wheel', e => { if (!lb.classList.contains('open')) return; e.preventDefault(); zTo(Z.s * Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0025)), e.clientX, e.clientY, false); }, { passive: false });
 lb.addEventListener('gesturestart', e => e.preventDefault());     // iOS Safari: our own pinch, not page zoom
 lb.addEventListener('dblclick', e => e.preventDefault());
-// slideshow (••• → Slideshow): full screen, a few seconds per photo, tap or Esc to stop
-const SLIDE_MS = 3500; let lbSlideT = null;
-function lbSlideNext() { clearTimeout(lbSlideT); lbSlideT = setTimeout(() => { if (!lb.classList.contains('open') || !lbSlideT) return; lbStep(1); lbSlideNext(); }, SLIDE_MS); }
-function lbSlideshow(it) {
-  const list = lbList.filter(x => x.type === 'photo'); if (list.length < 2) { toast('Add more photos here to play a slideshow'); return; }
-  if (!lb.classList.contains('open')) openLightbox(it || list[0], list); else { lbList = list; lbIdx = Math.max(0, list.indexOf(it || lbList[lbIdx])); showLb(); }
-  lb.classList.add('slide'); lbFullscreen(true); toast('Slideshow · tap to stop', 1800); lbSlideNext();
+// slideshow: viewer bar ▶ button, collection header "Play slideshow", or ••• → Slideshow. Full screen; swipe still
+// navigates; tap shows the controls (pause, speed 2 / 3.5 / 5 / 8 s, shuffle, done), which hide again after 3 s
+const SL = { on: false, paused: false, shuffle: false }; let lbSlideT = null;
+const slideMs = () => (idx && idx.settings.slideMs) || 3500;
+function lbSlideNext() { clearTimeout(lbSlideT); lbSlideT = null; if (!SL.on || SL.paused) return; lbSlideT = setTimeout(() => { if (!lb.classList.contains('open') || !SL.on || SL.paused) return;
+  if (SL.shuffle && lbList.length > 2) { let j; do j = Math.floor(Math.random() * lbList.length); while (j === lbIdx); lbIdx = j; showLb(); } else lbStep(1); lbSlideNext(); }, slideMs()); }
+function syncSlideBar() {
+  setIcon($('#lbPlay'), SL.on && !SL.paused ? 'pause' : 'play'); $('#lbPlay').setAttribute('aria-label', SL.on ? (SL.paused ? 'Resume slideshow' : 'Pause slideshow') : 'Play slideshow');
+  setIcon($('#lbSlPlay'), SL.paused ? 'play' : 'pause'); $('#lbSlPlay').setAttribute('aria-label', SL.paused ? 'Play' : 'Pause');
+  $$('#lbSlSpd [data-ms]').forEach(b => b.classList.toggle('on', +b.dataset.ms === slideMs())); $('#lbSlShuf').classList.toggle('on', SL.shuffle); $('#lbSlShuf').setAttribute('aria-pressed', String(SL.shuffle));
 }
-function lbSlideStop(quiet) { if (!lbSlideT) return; clearTimeout(lbSlideT); lbSlideT = null; lb.classList.remove('slide'); if (!quiet) toast('Slideshow stopped', 1200); }
+function lbSlideshow(it, list) {
+  list = (list || lbList).filter(x => x.type === 'photo'); if (list.length < 2) { toast('Add at least two photos here to play a slideshow'); return; }
+  if (!lb.classList.contains('open')) openLightbox(it || list[0], list, { full: true }); else { lbList = list; lbIdx = Math.max(0, list.indexOf(it || lbList[lbIdx])); showLb(); }
+  SL.on = true; SL.paused = false; lb.classList.add('slide'); lbFullscreen(true); syncSlideBar(); toast('Slideshow · tap for controls', 1800); lbSlideNext();
+}
+function lbSlidePause(p) { if (!SL.on) return; SL.paused = p ?? !SL.paused; syncSlideBar(); lbSlideNext(); }
+function lbSlideStop(quiet) { if (!SL.on) return; SL.on = false; SL.paused = false; clearTimeout(lbSlideT); lbSlideT = null; lb.classList.remove('slide'); syncSlideBar(); if (!quiet) toast('Slideshow stopped', 1200); }
+$('#lbPlay').onclick = () => SL.on ? lbSlidePause() : lbSlideshow(lbList[lbIdx]);
+$('#lbSlPlay').onclick = () => { lbSlidePause(); lbBarsAutoHide(); };
+$$('#lbSlSpd [data-ms]').forEach(b => b.onclick = () => { idx.settings.slideMs = +b.dataset.ms; save(); syncSlideBar(); lbSlideNext(); lbBarsAutoHide(); });
+$('#lbSlShuf').onclick = () => { SL.shuffle = !SL.shuffle; syncSlideBar(); lbBarsAutoHide(); };
+$('#lbSlDone').onclick = () => { lbSlideStop(true); lbBarsAutoHide(); };
 
 /* ---------- player ---------- */
 const pl = $('#player'), vid = $('#vid'); let curVid = null, plList = [], hideT, dragging = false, speedI = 0, plTok = 0; const SPEEDS = [1, 1.5, 2];
@@ -2687,10 +2715,10 @@ document.addEventListener('keydown', e => {
   }
   if (lb.classList.contains('open')) {
     const k = e.ctrlKey || e.metaKey || e.altKey ? '' : e.key;
-    if (e.key === 'ArrowLeft') { lbStep(-1); if (lbSlideT) lbSlideNext(); } else if (e.key === 'ArrowRight') { lbStep(1); if (lbSlideT) lbSlideNext(); }
-    else if (k === 'f') lbFullscreen(); else if (k === ' ' && lbSlideT) { e.preventDefault(); lbSlideStop(); }
+    if (e.key === 'ArrowLeft') { lbStep(-1); if (SL.on) lbSlideNext(); } else if (e.key === 'ArrowRight') { lbStep(1); if (SL.on) lbSlideNext(); }
+    else if (k === 'f') { lbAutoFs = false; lbFullscreen(); } else if (k === ' ' && SL.on) { e.preventDefault(); lbSlidePause(); }
     else if (k === '+' || k === '=') { const c = zCenter(); zTo(Z.s * 1.5, c.x, c.y, true); } else if (k === '-') { const c = zCenter(); zTo(Z.s / 1.5, c.x, c.y, true); } else if (k === '0') zReset(true);
-    else if (e.key === 'Escape') { if (performance.now() - lbFsLeftAt < 700) return; if (lbSlideT) { lbSlideStop(); lbFullscreen(false); } else if (lb.classList.contains('fs')) lbFullscreen(false); else if (Z.s > 1.01) zReset(true); else if (lb.classList.contains('bare')) lbBare(false); else closeLightbox(); }
+    else if (e.key === 'Escape') { if (performance.now() - lbFsLeftAt < 700) return; if (SL.on) { lbSlideStop(); lbFullscreen(false); } else if (Z.s > 1.01) zReset(true); else if (lb.classList.contains('fs')) { if (lbAutoFs) closeLightbox(); else lbFullscreen(false); } else if (lb.classList.contains('bare')) lbBare(false); else closeLightbox(); }
     return; }
   if (e.key === 'Escape' && selecting) endSelect();
   if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); nav('search', { focus: true }); }
@@ -2706,7 +2734,7 @@ UI.pullToRefresh({ indicator: $('#ptr'), enabled: () => !!idx && !selecting && [
   onRefresh: async () => { if (aiOn() && !AI.isRunning()) setTimeout(() => startAI(), 50); render(); } });
 if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
   const hadCtl = !!navigator.serviceWorker.controller; let reloading = false;
-  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => { swReg = reg; reg.update().catch(() => { }); document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); }); }).catch(e => console.warn('SW', e));
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => { swReg = reg; reg.update().catch(() => { }); setInterval(() => { if (!document.hidden) reg.update().catch(() => { }); }, 20 * 60000); document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => { }); }); }).catch(e => console.warn('SW', e));
   // a new version took over: reload straight away while locked; when unlocked, offer it (reloading locks Velvet)
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadCtl || reloading) return;
@@ -2718,4 +2746,4 @@ if ('serviceWorker' in navigator && !host && (location.protocol === 'https:' || 
   try { await Store.open(); (await Store.isSetUp()) ? gateUnlock() : gateSetup(); }
   catch (e) { gate.innerHTML = `<div class="mono">V</div><h1>Storage unavailable</h1><p class="sub">Velvet couldn’t open its encrypted storage (${esc(e.message)}). ${isIOS ? 'In Safari this happens with Settings → Safari → <b>Block All Cookies</b> turned on, or in some Private Browsing tabs. Turn that setting off or use a normal tab, then reload.' : 'Private browsing modes and “block all site data” settings prevent it. Open Velvet in a normal window.'}</p>`; }
 })();
-window.Velvet = { VS, get plStat() { return plStat; }, get vsToken() { return vsCur && vsCur.token; }, openPlayer, closePlayer, itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, IT, Cap, photoTools, savePhotoCopy, capOn, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, closeLightbox, lbFullscreen, lbSlideshow, lbSlideStop, get lbZoom() { return { ...Z }; }, get lbSliding() { return !!lbSlideT; }, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };
+window.Velvet = { VS, get plStat() { return plStat; }, get vsToken() { return vsCur && vsCur.token; }, openPlayer, closePlayer, itemSheet, backupFiles, TI, VT, Addons, Speech, OCR, videoTools, IT, Cap, photoTools, savePhotoCopy, capOn, startTextIndex, ensureAddon, get txProg() { return txProg; }, refreshAddonSt, applyCustomTags, ctEditor, ctReview, renderTags, builtinMenu, refreshTV, get TV() { return TV; }, CT, Dedupe, findDuplicate, backfillHashes, checkFolder, importFolderDesktop, flushDeletes, get pendingDeletes() { return pendingDel.length; }, openCx, closeCx, viewOptions, setZoom, gridPref, showTour, goBack, get navStack() { return navStack.map(e => e.v); }, actionSheet, applyTextSize, envFlags, hiddenAlbumsDialog, regenPreviews, previewDiagnostics, pvReport, People, openPerson, startPeople, toggleSelect, get reel() { return R; }, get chap() { return chap; }, Scenes, openReel, closeReel, nav, lockNow, importFiles, get idx() { return idx; }, Store, openPlayer, openLightbox, closeLightbox, lbFullscreen, lbSlideshow, lbSlideStop, get lbZoom() { return { ...Z }; }, get lbSliding() { return SL.on; }, get lbSlide() { return { ...SL, ms: slideMs() }; }, openCollection, newCollection, regenPreviews, Thumbs, AI, startAI, Smart, applyRules };

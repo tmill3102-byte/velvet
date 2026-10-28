@@ -2,7 +2,7 @@
 // It never sees your library key. Photos/videos live encrypted in IndexedDB and are decrypted in the page.
 // v1.8.1: for video playback it answers HTTP Range requests for ./__vstream/<token> by asking the page that
 // owns the token for just those bytes (the page decrypts only the chunks needed). Nothing is cached or stored.
-const VERSION = 'velvet-v14';
+const VERSION = 'velvet-v15';
 // AI model + runtime (~93 MB) live in their own cache so app updates don't re-download them
 const MODELS = 'velvet-ai-v1';
 const isModel = p => p.includes('/models/') || p.includes('/js/vendor/transformers/');
