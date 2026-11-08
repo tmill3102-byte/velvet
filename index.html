@@ -43,13 +43,16 @@
 
     <section class="view" id="v-library">
       <header class="lt"><h1>Library</h1><p id="libSub"></p></header>
-      <div class="toolrow"><div class="chips seg" id="libChips" role="tablist" aria-label="Show"></div><div class="tools"><button class="btn btn-ghost btn-sm" data-act="folder" id="folderBtn"><span data-ic="folder"></span><span class="t">Import folder</span></button><button class="txtbtn" data-act="select">Select</button></div></div>
+      <div class="toolrow"><button class="txtbtn filter-btn" id="libFilterBtn" aria-haspopup="dialog" aria-label="Filter library, showing All">All</button><div class="tools"><button class="btn btn-ghost btn-sm" data-act="folder" id="folderBtn"><span data-ic="folder"></span><span class="t">Import folder</span></button><button class="txtbtn" data-act="select">Select</button></div></div>
       <div class="grid" id="libGrid"></div>
     </section>
 
     <section class="view" id="v-collections">
       <header class="lt"><h1>Collections</h1><p id="colCount"></p></header>
-      <div id="peopleRow"></div>
+      <div id="catRow" class="cat-row" role="toolbar" aria-label="Collection categories"></div>
+      <div id="catPanel" class="cat-panel" hidden></div>
+      <div class="sub-h albums-h" id="albumsLabel">Your collections</div>
+      <div id="peopleRow" hidden></div>
       <div id="smartAlbums"></div>
       <div class="cols" id="colGrid"></div>
     </section>
@@ -67,8 +70,8 @@
         <div id="searchPeople"></div>
         <div class="sub-h">Suggestions</div>
         <div class="chips suggest" id="suggest"></div>
-        <div class="sub-h">Browse by tag</div>
-        <div class="chips" id="tags"></div>
+        <button class="sub-h disc" id="tagDisc" type="button" aria-expanded="false" aria-controls="tagWrap">Browse by tag</button>
+        <div id="tagWrap" hidden><div class="chips" id="tags"></div></div>
       </div>
       <div id="saidRes"></div>
       <div class="sub-h" id="resH">Results</div>

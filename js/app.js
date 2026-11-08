@@ -150,12 +150,13 @@ const itemById = id => idx.items.find(i => i.id === id);
 const colById = id => idx.collections.find(c => c.id === id);
 
 /* ---------- navigation ---------- */
-const TABS = [['library', 'Library', 'grid'], ['collections', 'Collections', 'cols'], ['search', 'Search', 'search'], ['vault', 'Vault', 'vault'], ['profile', 'Profile', 'user']];
-$('#sideNav').innerHTML = TABS.map(t => `<button class="nav-btn" data-nav="${t[0]}"><span data-ic="${t[2]}"></span>${t[1]}</button>`).join('');
+const TABS = [['library', 'Library', 'grid'], ['collections', 'Collections', 'cols'], ['search', 'Search', 'search'], ['profile', 'Profile', 'user']];
+const SIDE = [['library', 'Library', 'grid'], ['collections', 'Collections', 'cols'], ['search', 'Search', 'search'], ['vault', 'Vault', 'vault'], ['profile', 'Profile', 'user']];
+$('#sideNav').innerHTML = SIDE.map(t => `<button class="nav-btn" data-nav="${t[0]}"><span data-ic="${t[2]}"></span>${t[1]}</button>`).join('');
 $('#bottomNav').innerHTML = TABS.map(t => `<button class="bn" data-nav="${t[0]}"><span data-ic="${t[2]}"></span>${t[1]}</button>`).join('');
 /* iOS-style navigation stack: tabs are roots; collection, people, person, dupes, best, archive and rules are pushed screens
    (back button + edge swipe). Each entry remembers its scroll position, collection and person. */
-const ROOTS = TABS.map(t => t[0]);
+const ROOTS = SIDE.map(t => t[0]);
 let navStack = [{ v: 'library', y: 0 }];
 function nav(v, opt = {}) {
   if (!idx) return;
@@ -200,12 +201,16 @@ function updNav() {
   let r = '';
   if (view === 'library') r = B('id="nbView"', 'more', 'View options') + B('data-act="import"', 'plus', 'Import photos and videos', 'data-primary');
   else if (view === 'collections') r = B('id="nbAdd"', 'plus', 'Add', 'data-primary');
-  else if (view === 'collection') r = `<button class="txtbtn" data-act="select">Select</button>` + B('id="nbColMore"', 'more', 'Collection options');
+  else if (view === 'collection') {
+    const slide = collectionPhotos().length > 1;
+    r = (slide ? `<button class="txtbtn" id="colPlay">Slideshow</button>` : `<button class="txtbtn" data-act="select">Select</button>`) + B('id="nbColMore"', 'more', 'Collection options');
+  }
   else if (view === 'vault' && (!idx.settings.vaultPin || vaultOpen)) r = `<button class="txtbtn" data-act="select">Select</button>`;
   $('#nbRight').innerHTML = r;
   const vb = $('#nbView'); if (vb) vb.onclick = viewOptions;
-  const ab = $('#nbAdd'); if (ab) ab.onclick = async () => { const k = await actionSheet('', [{ r: 'import', label: 'Import photos & videos', ic: 'plus' }, { r: 'col', label: 'New collection', ic: 'cols' }]); if (k === 'import') pickFiles(); else if (k === 'col') newCollection(); };
+  const ab = $('#nbAdd'); if (ab) ab.onclick = () => collectionsAddMenu();
   const cm = $('#nbColMore'); if (cm) cm.onclick = () => { if (isSmart(curCol)) smartMenu(); else { const c = colById(curCol); if (c) collectionMenu(c); } };
+  const cp = $('#colPlay'); if (cp) cp.onclick = () => { const list = collectionPhotos(); if (list.length > 1) lbSlideshow(list[0], list); };
 }
 $('#nbBack').onclick = () => { UI.haptic(); goBack(); };
 function render() {
@@ -313,7 +318,8 @@ function lockNow() { hashTok++; try { closeReel(); } catch (e) { } if (typeof ru
   endStream(); VS.closeAll(); Store.lock(); idx = null; vaultOpen = false; tileErrs.clear();
   for (const u of thumbs.values()) URL.revokeObjectURL(u); thumbs.clear();
   for (const u of fulls.values()) URL.revokeObjectURL(u); fulls.clear();
-  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#bestBody', '#archBody', '#rulesBody', '#tagsBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
+  openCat = null;
+  ['#libGrid', '#colItems', '#results', '#vaultBody', '#profileBody', '#colGrid', '#sideCols', '#colHero', '#rel', '#lbStage', '#smartAlbums', '#catRow', '#catPanel', '#bestBody', '#archBody', '#rulesBody', '#tagsBody', '#dupesBody', '#peopleRow', '#searchPeople', '#peopleBody', '#personBody'].forEach(s => { const e = $(s); if (e) e.innerHTML = ''; });
   app.classList.add('locked'); app.setAttribute('aria-hidden', 'true'); lockEl.classList.add('open');
   gateUnlock();
 }
@@ -383,8 +389,9 @@ function tileInner(it, i, opts, ph) {
 const gridPref = () => { const g = (idx && idx.settings.grid) || {}; return { fit: !!g.fit, zoom: g.zoom || 0 }; };
 function gridCols(el) {
   const w = el.clientWidth || el.parentElement?.clientWidth || innerWidth, { fit, zoom } = gridPref();
-  if (w < 700) return Math.max(fit ? 1 : 2, Math.min(fit ? 4 : 6, (fit ? 2 : 3) + zoom));
-  return Math.max(2, Math.min(12, (fit ? Math.floor((w + 16) / 236) : Math.floor((w + 4) / 234)) + zoom));
+  // v1.9: larger photo tiles (phone square starts at 2-up; desktop targets ~300px). Pinch and View still zoom.
+  if (w < 700) return Math.max(1, Math.min(fit ? 4 : 5, (fit ? 2 : 2) + zoom));
+  return Math.max(2, Math.min(8, (fit ? Math.floor((w + 16) / 300) : Math.floor((w + 4) / 300)) + zoom));
 }
 function setZoom(d) {
   if (!idx) return; const g = idx.settings.grid = idx.settings.grid || {}, before = g.zoom || 0;
@@ -452,11 +459,12 @@ const sortNew = list => list.slice().sort((a, b) => b.added - a.added);
 const dev = host ? 'this PC' : isIOS ? 'this iPhone' : 'this device';
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function renderLibrary() {
-  $('#libChips').innerHTML = FILTERS.map(c => `<button class="chip ${libFilter === c[0] ? 'on' : ''}" data-f="${c[0]}" role="tab" aria-selected="${libFilter === c[0]}">${c[1]}</button>`).join('');
+  const fl = (FILTERS.find(c => c[0] === libFilter) || FILTERS[0])[1];
+  const fb = $('#libFilterBtn'); if (fb) { fb.textContent = fl; fb.setAttribute('aria-label', `Filter library, showing ${fl}`); }
   const all = visible();
   const np = all.filter(i => i.type === 'photo').length, nv = all.length - np;
-  $('#libSub').textContent = all.length ? `${plural(np, 'photo')} · ${plural(nv, 'video')}` : `Encrypted on ${dev}`;
   const list = sortNew(all.filter(i => libFilter === 'all' || (libFilter === 'photos' && i.type === 'photo') || (libFilter === 'videos' && i.type === 'video') || (libFilter === 'favorites' && i.fav)));
+  $('#libSub').textContent = all.length ? (libFilter === 'all' ? `${plural(np, 'photo')} · ${plural(nv, 'video')}` : `${fl} · ${plural(list.length, 'item')}`) : `Encrypted on ${dev}`;
   const E = { favorites: ['heart', 'No favorites yet', 'Press and hold a photo or video, then tap Favorite. They’ll all be here.'], photos: ['photo', 'No photos yet', 'Tap + to add some.'], videos: ['film', 'No videos yet', 'Tap + to add some.'] }[libFilter] || ['photo', 'Nothing here', 'Try another filter.'];
   const tour = !idx.settings.tourDone;
   const empty = all.length ? emptyHTML(...E) :
@@ -467,7 +475,10 @@ function renderLibrary() {
   if (!all.length && tour) bindTour($('#libGrid'), async () => { idx.settings.tourDone = 1; await save(); renderLibrary(); });
 }
 function emptyHTML(ic, title, text, btn) { return `<div class="empty"><span class="eic">${IC[ic] || ''}</span><b>${title}</b><span class="et">${text}</span>${btn || ''}</div>`; }
-$('#libChips').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c || c.dataset.f === libFilter) return; UI.haptic(); libFilter = c.dataset.f; renderLibrary(); });
+$('#libFilterBtn').onclick = async () => {
+  const k = await actionSheet('Show', FILTERS.map(([id, label]) => ({ r: id, label: (libFilter === id ? '✓ ' : '') + label, ic: id === 'favorites' ? 'heart' : id === 'photos' ? 'photo' : id === 'videos' ? 'film' : 'grid' })));
+  if (!k || k === libFilter) return; UI.haptic(); libFilter = k; renderLibrary();
+};
 { const ls = $('#libSearch'); if (ls) ls.addEventListener('input', e => { const v = e.target.value; e.target.value = ''; $('#q').value = v; nav('search', { focus: true }); }); }
 /* first-run walkthrough: three swipeable cards (inline in the empty Library, or as a sheet from Profile → Help) */
 const TOUR = [
@@ -498,16 +509,58 @@ function renderSideCols() {
     `<button class="nav-btn" id="sideNewCol"><span data-ic="plus"></span>New collection</button>`;
   hydrateIcons($('#sideCols')); $('#sideNewCol').onclick = () => newCollection();
 }
+/* v1.9: Collections stays a short screen. Category cards open Places, Themes, Moments, Your AI tags and People.
+   Personal collections sit underneath. Sort, hidden albums and AI tools stay behind +. Nothing is removed. */
+let openCat = null, albumSort = 'recent';
+const CAT_DEFS = [['people', 'People', 'people'], ['place', 'Places', 'image'], ['theme', 'Themes', 'spark'], ['moment', 'Moments', 'film'], ['custom', 'Your AI tags', 'tag']];
+function sortedCols() {
+  const list = idx.collections.slice();
+  if (albumSort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  else if (albumSort === 'count') list.sort((a, b) => colItems(b).length - colItems(a).length || a.name.localeCompare(b.name));
+  else list.sort((a, b) => (b.created || 0) - (a.created || 0));
+  return list;
+}
+function albumCard(c, i) {
+  const n = colItems(c).length;
+  return `<div class="col-card album" data-col="${c.id}" style="--fb:${fbFor(c.id)};--i:${i}" role="button" tabindex="0" aria-label="${esc(c.name)}, ${plural(n, 'item')}">${coverImg(c)}<div class="gloss"></div>
+     <div class="cmenu"><button class="iconbtn" data-cm="${c.id}" aria-label="Options for ${esc(c.name)}">${IC.more}</button></div>
+     <div class="info"><div><h3>${esc(c.name)}</h3><p>${plural(n, 'item')}</p></div></div></div>`;
+}
 function renderCollections() {
-  $('#colCount').textContent = idx.collections.length ? plural(idx.collections.length, 'collection') : 'Group your photos and videos any way you like';
-  $('#colGrid').innerHTML = idx.collections.map((c, i) => `<div class="col-card" data-col="${c.id}" style="--fb:${fbFor(c.id)};--i:${i}" role="button" tabindex="0">${coverImg(c)}<div class="tint user"></div><div class="gloss"></div>
-     <div class="cmenu"><button class="iconbtn" data-cm="${c.id}" aria-label="Collection options">${IC.more}</button></div>
-     <div class="info"><div><h3>${esc(c.name)}</h3><p>${colItems(c).length} items</p></div><span class="lockchip">${IC.lock}</span></div></div>`).join('') +
-    `<button class="col-card col-new" id="newCol" style="--i:${idx.collections.length}"><span class="cv">${IC.plus}</span><span class="nt">New collection</span></button>`;
-  hydrateCovers($('#colGrid')); renderSmartAlbums(); renderPeopleRow('#peopleRow');
+  const cols = sortedCols();
+  $('#colCount').textContent = cols.length ? plural(cols.length, 'collection') : 'Group your photos and videos any way you like';
+  $('#colGrid').innerHTML = (cols.length ? cols.map(albumCard).join('') : '') +
+    `<button class="col-card col-new" id="newCol" style="--i:${cols.length}"><span class="cv">${IC.plus}</span><span class="nt">New collection</span></button>`;
+  hydrateCovers($('#colGrid')); renderSmartAlbums();
   $('#newCol').onclick = () => newCollection();
-  $$('#colGrid .col-card[data-col]').forEach(c => { const f = () => { const x = colById(c.dataset.col); if (x) collectionMenu(x); }; c.oncontextmenu = e => { e.preventDefault(); f(); }; UI.longPress(c, f); });
-  $$('[data-cm]').forEach(b => b.onclick = e => { e.stopPropagation(); collectionMenu(colById(b.dataset.cm)); });
+  $$('#colGrid .col-card[data-col]').forEach(c => {
+    const f = () => { const x = colById(c.dataset.col); if (x) collectionMenu(x); };
+    c.oncontextmenu = e => { e.preventDefault(); f(); }; UI.longPress(c, f);
+    c.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCollection(c.dataset.col); } };
+  });
+  $$('#colGrid [data-cm]').forEach(b => b.onclick = e => { e.stopPropagation(); collectionMenu(colById(b.dataset.cm)); });
+}
+async function collectionsAddMenu() {
+  const mark = k => albumSort === k ? '✓ ' : '';
+  const nh = Object.keys((idx.settings && idx.settings.smartHidden) || {}).length;
+  const k = await actionSheet('Collections', [
+    { r: 'import', label: 'Import photos & videos', ic: 'plus' },
+    { r: 'col', label: 'New collection', ic: 'cols' },
+    { r: 'sort-recent', label: mark('recent') + 'Sort by recent', ic: 'bolt' },
+    { r: 'sort-name', label: mark('name') + 'Sort by name', ic: 'edit' },
+    { r: 'sort-count', label: mark('count') + 'Sort by most items', ic: 'grid' },
+    { r: 'hidden', label: nh ? `Hidden auto albums (${nh})` : 'Hidden auto albums', ic: 'eye' },
+    { r: 'tags', label: 'Custom tags', ic: 'tag' },
+    { r: 'rules', label: 'Smart rules', ic: 'sliders' },
+    { r: 'people', label: 'People', ic: 'people' },
+  ]);
+  if (k === 'import') pickFiles();
+  else if (k === 'col') newCollection();
+  else if (k && k.startsWith('sort-')) { albumSort = k.slice(5); if (view === 'collections') renderCollections(); }
+  else if (k === 'hidden') hiddenAlbumsDialog();
+  else if (k === 'tags') nav('tags');
+  else if (k === 'rules') nav('rules');
+  else if (k === 'people') nav('people');
 }
 async function newCollection(addIds) {
   const name = (await promptBox('New collection', '', '', 'Create') || '').trim(); if (!name) return null;
@@ -517,7 +570,10 @@ async function newCollection(addIds) {
 }
 async function collectionMenu(c) {
   const fs = host && host.listFolder && c.src ? [{ r: 'check', label: 'Check for new files', ic: 'folder' }, { r: 'auto', label: c.src.auto ? 'Stop checking when Velvet opens' : 'Check automatically when Velvet opens', ic: 'bolt' }, { r: 'unlink', label: 'Forget the folder', ic: 'close' }] : [];
-  const r = await actionSheet(c.name, [...fs, { r: 'import', label: 'Add photos & videos', ic: 'plus' }, { r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'delete', label: 'Delete collection', ic: 'trash', danger: true }]);
+  const slide = colItems(c).filter(x => x.type === 'photo').length > 1 ? [{ r: 'slide', label: 'Play slideshow', ic: 'play' }] : [];
+  const r = await actionSheet(c.name, [...fs, ...slide, { r: 'select', label: 'Select', ic: 'check' }, { r: 'import', label: 'Add photos & videos', ic: 'plus' }, { r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'rename', label: 'Rename', ic: 'edit' }, { r: 'delete', label: 'Delete collection', ic: 'trash', danger: true }]);
+  if (r === 'slide') { lbSlideshow(null, sortNew(colItems(c))); return; }
+  if (r === 'select') { if (view !== 'collection' || curCol !== c.id) openCollection(c.id); toggleSelect(); return; }
   if (r === 'reel') { openReel(colItems(c), c.name); return; }
   if (r === 'check') { await checkFolder(c); return; }
   if (r === 'auto') { c.src.auto = !c.src.auto; await save(); toast(c.src.auto ? `Velvet will check “${c.name}” for new files each time it opens` : 'Automatic checks turned off'); if (view === 'collection') renderCollection(); return; }
@@ -534,23 +590,31 @@ async function collectionMenu(c) {
   }
 }
 function openCollection(id) { curCol = id; nav('collection'); }
+function collectionPhotos() {
+  if (!idx || view !== 'collection') return [];
+  if (isSmart(curCol)) {
+    const a = smartById(curCol); if (!a) return [];
+    const items = a.ids.map(itemById).filter(i => i && i.type === 'photo' && !i.vault && !i.archived);
+    return a.kind === 'moment' ? items.slice().sort((x, y) => Smart.timeOf(x) - Smart.timeOf(y)) : sortNew(items);
+  }
+  const c = colById(curCol); if (!c) return [];
+  return sortNew(colItems(c).filter(x => x.type === 'photo'));
+}
 function renderCollection() {
   if (isSmart(curCol)) { renderSmartCollection(); return; }
   const c = colById(curCol); if (!c) { nav('collections'); return; }
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(c.id));
   const n = colItems(c).length;
-  h.innerHTML = `${coverImg(c)}<div class="tint user"></div><div class="hero-fade"></div>
-    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private${c.src && host ? ` · ${IC.folder}From a folder${c.src.auto ? ', checked when Velvet opens' : ''}${c.src.last ? ` · checked ${ago(c.src.last)}` : ''}` : ''}</p></div>
-    <div class="hero-actions">${c.src && host && host.listFolder ? `<button class="btn btn-primary btn-sm" id="colSync">${IC.folder}<span>Check for new files</span></button>` : ''}${colItems(c).filter(x => x.type === 'photo').length > 1 ? `<button class="btn ${c.src && host ? 'btn-ghost' : 'btn-primary'} btn-sm" id="colPlay">${IC.play}<span>Play slideshow</span></button>` : ''}${n ? `<button class="btn btn-ghost btn-sm" id="colReel">${IC.reel}<span>Highlights</span></button>` : ''}</div>`;
+  h.innerHTML = `${coverImg(c)}<div class="hero-fade"></div>
+    <div class="info"><h2>${esc(c.name)}</h2><p>${IC.lock}${plural(n, 'item')} · Private${c.src && host ? ` · ${IC.folder}From a folder${c.src.auto ? ', checked when Velvet opens' : ''}${c.src.last ? ` · checked ${ago(c.src.last)}` : ''}` : ''}</p></div>`;
   hydrateCovers(h); h.classList.toggle('nocover', !coverOf(c));
-  const cp = $('#colPlay'); if (cp) cp.onclick = () => lbSlideshow(null, sortNew(colItems(c)));
-  const cr = $('#colReel'); if (cr) cr.onclick = () => openReel(colItems(c), c.name);
-  const cs = $('#colSync'); if (cs) cs.onclick = async () => { cs.disabled = true; await checkFolder(c); cs.disabled = false; };
   renderGrid($('#colItems'), sortNew(colItems(c)), emptyHTML('cols', 'This collection is empty', 'Add photos and videos straight into it, or choose <b>Select</b> in your Library and tap <b>Add to</b>.', `<button class="btn btn-primary" data-act="import">${IC.plus}Add photos &amp; videos</button>`));
+  updNav();
 }
 
 /* ---------- search ---------- */
 const activeTags = new Set();
+let tagsOpen = false;
 function hl(s, q) { s = esc(s); if (!q) return s; const i = s.toLowerCase().indexOf(q); return i < 0 ? s : s.slice(0, i) + '<mark>' + s.slice(i, i + q.length) + '</mark>' + s.slice(i + q.length); }
 function tagCounts() { const m = new Map(); visible().forEach(i => (i.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1))); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
 function aiTagCounts() { const m = new Map(), mine = new Set(tagCounts()); visible().forEach(i => [...TV.custom(i), ...TV.ai(i)].forEach(t => { if (!mine.has(t)) m.set(t, (m.get(t) || 0) + 1); })); return [...m.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]); }
@@ -565,6 +629,8 @@ function renderSearch() {
   const aiT = aiTagCounts().slice(0, 16);
   $('#tags').innerHTML = special.concat(tags.map(t => [t, t, 'tag'])).concat(aiT.map(t => [t, t, 'spark', 'ai'])).map(([k, l, ic, cls]) => `<button class="tag ${cls || ''} ${activeTags.has(k) ? 'on' : ''}" data-tag="${esc(k)}" ${cls ? 'title="AI tag"' : ''}>${IC[ic]}${esc(l)}${activeTags.has(k) ? '<span class="x">×</span>' : ''}</button>`).join('') +
     (tags.length || aiT.length ? '' : '<span class="hint-line">Tags you add (press and hold → Details) show up here.</span>');
+  const tagWrap = $('#tagWrap'), tagDisc = $('#tagDisc');
+  if (tagWrap && tagDisc) { if (activeTags.size) tagsOpen = true; tagWrap.hidden = !tagsOpen; tagDisc.setAttribute('aria-expanded', String(tagsOpen)); const nTags = tags.length + aiT.length; tagDisc.textContent = nTags ? `Browse by tag · ${nTags}` : 'Browse by tag'; }
   let sug = [];
   if (q) {
     sug = tags.filter(t => t.includes(q)).slice(0, 3).map(t => ({ k: 'tag', v: t }))
@@ -618,6 +684,7 @@ function renderSaid(q) {
 $('#saidRes').addEventListener('click', e => { const r = e.target.closest('.said-row'); if (!r) return; const it = itemById(r.dataset.id); if (it) openPlayer(it, null, +r.dataset.t); });
 let sT; $('#q').addEventListener('input', () => { clearTimeout(sT); sT = setTimeout(renderSearch, 80); });
 $('#qClear').addEventListener('click', e => { e.preventDefault(); $('#q').value = ''; activeTags.clear(); renderSearch(); });
+$('#tagDisc').onclick = () => { tagsOpen = !tagsOpen; const w = $('#tagWrap'); if (w) w.hidden = !tagsOpen; $('#tagDisc').setAttribute('aria-expanded', String(tagsOpen)); };
 $('#tags').addEventListener('click', e => { const t = e.target.closest('.tag'); if (!t) return; const k = t.dataset.tag; activeTags.has(k) ? activeTags.delete(k) : activeTags.add(k); renderSearch(); });
 $('#suggest').addEventListener('click', e => { const c = e.target.closest('.chip'); if (!c) return; if (c.dataset.k === 'person') { openPerson(c.dataset.pid); return; } if (c.dataset.k === 'tag') { activeTags.add(c.dataset.s); $('#q').value = ''; } else $('#q').value = c.dataset.s.toLowerCase(); renderSearch(); });
 
@@ -665,9 +732,10 @@ async function renderProfile() {
   $('#profileBody').innerHTML = `
     <div class="card storage"><div class="ring-wrap"><svg viewBox="0 0 200 200"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF7AB4"/><stop offset=".5" stop-color="#FF2E88"/><stop offset="1" stop-color="#C2185B"/></linearGradient></defs><circle class="ring-bg" cx="100" cy="100" r="86"/><circle class="ring-fg" id="ring" cx="100" cy="100" r="86"/></svg>
       <div class="ring-label"><b>${num}<small>${unit}</small></b><span>used</span></div></div>
-      <div class="stat-grid"><div class="stat"><b>${photos}</b><span>Photos</span></div><div class="stat"><b>${videos}</b><span>Videos</span></div><div class="stat"><b>${vaultN}</b><span>In Vault</span></div><div class="stat"><b>${quota ? bytes(Math.max(0, quota - libBytes)) : '—'}</b><span>${free != null ? 'Free on disk' : 'Space left'}</span></div></div>
+      <div class="stat-grid"><div class="stat"><b>${photos}</b><span>Photos</span></div><div class="stat"><b>${videos}</b><span>Videos</span></div><button class="stat" id="vaultStat" type="button"><b>${vaultN}</b><span>In Vault</span></button><div class="stat"><b>${quota ? bytes(Math.max(0, quota - libBytes)) : '—'}</b><span>${free != null ? 'Free on disk' : 'Space left'}</span></div></div>
       <p class="store-note">${IC.lock}Encrypted on ${dev}${!host ? ` · ${persisted ? 'protected from browser cleanup' : 'not protected from browser cleanup yet'}` : ''}</p></div>
     ${GROUP('Privacy & lock', [
+      ROW({ ic: 'vault', c: '#A3123F', t: 'Vault', d: vaultN ? `${plural(vaultN, 'item')} hidden from Library, Collections and Search` : 'Extra-private. Hidden from Library, Collections and Search', id: 'openVault', tap: 1 }),
       ROW({ ic: 'lock', t: 'Auto-lock', d: 'Locks Velvet when you haven’t used it for a while', right: `<select id="alMin" aria-label="Lock after">${[1, 2, 5, 10, 30].map(m => `<option value="${m}" ${s.autolockMin == m ? 'selected' : ''}>${m} min</option>`).join('')}</select>${SW('autolock', s.autolock, 'Auto-lock')}` }),
       ROW({ ic: 'open', c: '#E0567A', t: 'Lock when I leave', d: 'Locks the moment you switch apps', right: SW('lockOnHide', s.lockOnHide, 'Lock when I leave') }),
       ROW({ ic: 'eye', c: '#C2185B', t: 'Hide in app switcher', d: 'Blurs Velvet in the recent-apps view', right: SW('hide', s.hide, 'Hide in app switcher') }),
@@ -704,6 +772,7 @@ async function renderProfile() {
   $('#fitSw').onclick = async () => { const g = s.grid = s.grid || {}; g.fit = !g.fit; g.zoom = 0; $('#fitSw').setAttribute('aria-checked', String(g.fit)); UI.haptic(); await save(); toast(g.fit ? 'Showing whole photos' : 'Showing square tiles'); };
   $('#tsSeg').onclick = e => { const b = e.target.closest('[data-ts]'); if (!b) return; s.textSize = b.dataset.ts; try { localStorage.setItem('velvet.ts', s.textSize); } catch (er) { } applyTextSize(); save(); UI.haptic(); renderProfile(); };
   $('#tourBtn').onclick = showTour;
+  const openV = () => nav('vault'); const ov = $('#openVault'); if (ov) ov.onclick = openV; const vs = $('#vaultStat'); if (vs) vs.onclick = openV;
   $('#vpinBtn').onclick = vaultPinFlow; $('#chPass').onclick = changePassFlow; $('#bkBtn').onclick = exportBackup; $('#rsBtn').onclick = () => startRestore();
   bindAICard(); bindAddons(); $('#regenBtn').onclick = () => regenPreviews(); $('#pvBtn').onclick = previewDiagnostics; const rpb = $('#repairBtn'); if (rpb) rpb.onclick = repairAppFiles; renderEnvCard(); $('#wipeBtn').onclick = wipeFlow; if (host) $('#dataBtn').onclick = () => host.openDataFolder();
 }
@@ -749,7 +818,7 @@ $('#folder').addEventListener('change', e => { const fs = Array.from(e.target.fi
 
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
 async function makeThumb(f, type, mime, opts) { return type === 'video' ? Thumbs.videoThumb(f, mime, opts) : Thumbs.imageThumb(f, mime); }
-const APP_VER = '1.8.3';
+const APP_VER = '1.9.0';
 // per-item preview outcome (kept in the encrypted index): no media data, only codec/MIME/size/error text
 function notePreview(it, th, err) {
   const d = (th && th.diag) || {};
@@ -973,6 +1042,7 @@ function peopleRowHTML(title) {
   return `<div class="sub-h smart-h people-h">${IC.people}${title}<button class="txtbtn" data-nav="people">See all</button></div><div class="prow">${L.map(personCard).join('')}</div>`;
 }
 async function renderPeopleRow(sel) {
+  if (sel === '#peopleRow') { if (view === 'collections') renderSmartAlbums(); return; }
   const el = $(sel); if (!el) return;
   if (!peopleOn()) { el.innerHTML = ''; return; }
   await People.open(idx); el.innerHTML = peopleRowHTML('People'); bindPeople(el);
@@ -1456,8 +1526,20 @@ async function viewOptions() {
 /* auto album ⋯ menu */
 async function smartMenu() {
   const a = smartById(curCol); if (!a) return; const hidden = !!smartHidden()[a.id];
-  const k = await actionSheet(a.name, [{ r: 'reel', label: 'Play highlights', ic: 'reel' }, { r: 'save', label: 'Save as collection', ic: 'plus' }, { r: 'select', label: 'Select', ic: 'check' }, hidden ? { r: 'show', label: 'Show in Collections', ic: 'eye' } : { r: 'hide', label: 'Hide this album', ic: 'eye' }], 'Auto albums update themselves as your library changes.');
-  if (k === 'reel') $('#smReel').click(); else if (k === 'save') $('#smSave').click(); else if (k === 'select') toggleSelect();
+  const items = () => a.ids.map(itemById).filter(i => i && !i.vault && !i.archived);
+  const k = await actionSheet(a.name, [
+    a.ct ? { r: 'review', label: 'Review this tag', ic: 'check' } : { r: 'reel', label: 'Play highlights', ic: 'reel' },
+    a.ct ? { r: 'edit', label: 'Edit tag', ic: 'edit' } : { r: 'save', label: 'Save as collection', ic: 'plus' },
+    items().filter(i => i.type === 'photo').length > 1 ? { r: 'slide', label: 'Play slideshow', ic: 'play' } : null,
+    { r: 'select', label: 'Select', ic: 'check' },
+    hidden ? { r: 'show', label: 'Show in Collections', ic: 'eye' } : { r: 'hide', label: 'Hide this album', ic: 'eye' },
+  ].filter(Boolean), 'Auto albums update themselves as your library changes.');
+  if (k === 'reel') openReel(items(), a.name);
+  else if (k === 'save') await saveSmartAsCollection(a);
+  else if (k === 'review') { const t = ctById(a.ct); if (t) ctReview(t); }
+  else if (k === 'edit') { const t = ctById(a.ct); if (t) ctEditor(t); }
+  else if (k === 'slide') { const list = collectionPhotos(); if (list.length > 1) lbSlideshow(list[0], list); }
+  else if (k === 'select') toggleSelect();
   else if (k === 'show') { delete smartHidden()[a.id]; await save(); toast('Shown in Collections again'); renderSmartCollection(); }
   else if (k === 'hide') { await hideSmart(a); nav('collections'); toast(`“${a.name}” hidden`, 0, { undo: async () => { delete smartHidden()[a.id]; await save(); if (view === 'collections') renderSmartAlbums(); } }); }
 }
@@ -2372,37 +2454,92 @@ async function hiddenAlbumsDialog() {
 }
 const KINDL = { custom: 'Your AI tags', place: 'Places', theme: 'Themes', moment: 'Moments' };
 const smartCover = a => a.ids.map(itemById).filter(Boolean).sort((x, y) => AI.quality(y) - AI.quality(x))[0];
+let smartPaint = 0;
+function smartCard(a, i) {
+  const cv = smartCover(a);
+  return `<div class="col-card smart" data-smart="${esc(a.id)}" style="--fb:${fbFor(a.id)};--i:${i}" role="button" tabindex="0" aria-label="${esc(a.name)}, ${plural(a.ids.length, 'item')}">${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="gloss"></div>
+    <span class="auto-chip">${IC.spark}Auto</span><div class="cmenu"><button class="iconbtn" data-hide="${esc(a.id)}" aria-label="Options for ${esc(a.name)}">${IC.more}</button></div>
+    <div class="info"><div><h3>${esc(a.name)}</h3><p>${plural(a.ids.length, 'item')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div></div></div>`;
+}
+function bindSmartCards(root) {
+  hydrateCovers(root);
+  root.querySelectorAll('[data-smart]').forEach(c => {
+    c.onclick = () => openCollection(c.dataset.smart);
+    c.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCollection(c.dataset.smart); } };
+  });
+  root.querySelectorAll('[data-hide]').forEach(b => b.onclick = async e => { e.stopPropagation(); const a = smartById(b.dataset.hide); if (!a) return;
+    const r = await actionSheet(a.name, [{ r: 'hide', label: 'Hide this album', ic: 'eye' }, { r: 'open', label: 'Open', ic: 'cols' }], 'You can bring a hidden album back any time from Collections → + → Hidden auto albums.');
+    if (r === 'open') openCollection(a.id);
+    else if (r === 'hide') { await hideSmart(a); renderSmartAlbums(); toast(`“${a.name}” hidden`, 0, { undo: async () => { delete smartHidden()[a.id]; await save(); if (view === 'collections') renderSmartAlbums(); } }); } });
+}
+function paintCatCards(subOf) {
+  const row = $('#catRow'); if (!row) return;
+  row.innerHTML = CAT_DEFS.map(([id, name, ic], i) => {
+    const on = openCat === id;
+    return `<button class="cat-card${on ? ' on' : ''}" type="button" data-cat="${id}" aria-expanded="${on}" aria-controls="catPanel" style="--i:${i}"><span class="cat-ic" aria-hidden="true">${IC[ic]}</span><span class="cat-tx"><b>${name}</b><small>${subOf(id)}</small></span></button>`;
+  }).join('');
+  row.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { openCat = openCat === b.dataset.cat ? null : b.dataset.cat; UI.haptic(); renderSmartAlbums(); });
+}
 async function renderSmartAlbums() {
-  const el = $('#smartAlbums'); if (!el) return;
-  if (!aiOn()) { el.innerHTML = ''; return; }
-  const H = smartHidden(), al = (await getSmart()).filter(a => !H[a.id]); if (view !== 'collections') return;
-  if (!al.length) { el.innerHTML = `<div class="smart-empty">${IC.spark}<span>Auto albums show up here once on-device AI has looked at a few photos.</span></div>`; return; }
-  el.innerHTML = Object.entries(KINDL).map(([k, l]) => { const xs = al.filter(a => a.kind === k); if (!xs.length) return '';
-    return `<div class="sub-h smart-h">${IC.spark}${l}</div><div class="smart-row">${xs.map((a, i) => { const cv = smartCover(a);
-      return `<div class="col-card smart" data-smart="${esc(a.id)}" style="--fb:${fbFor(a.id)};--i:${i}" role="button" tabindex="0">${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="gloss"></div>
-        <span class="auto-chip">${IC.spark}Auto</span><div class="cmenu"><button class="iconbtn" data-hide="${esc(a.id)}" aria-label="Hide this album" title="Hide this album">${IC.more}</button></div><div class="info"><div><h3>${esc(a.name)}</h3><p>${a.ids.length} items${a.sub ? ' · ' + esc(a.sub) : ''}</p></div></div></div>`; }).join('')}</div>`; }).join('') +
-    `<div class="sub-h smart-h mine">Your collections</div>`;
-  hydrateCovers(el);
-  el.querySelectorAll('[data-smart]').forEach(c => c.onclick = () => openCollection(c.dataset.smart));
-  el.querySelectorAll('[data-hide]').forEach(b => b.onclick = async e => { e.stopPropagation(); const a = smartById(b.dataset.hide); if (!a) return;
-    const r = await actionSheet(a.name, [{ r: 'hide', label: 'Hide this album', ic: 'eye' }], 'You can bring it back any time in Profile → Hidden auto albums.');
-    if (r === 'hide') { await hideSmart(a); renderSmartAlbums(); toast(`“${a.name}” hidden`, 0, { undo: async () => { delete smartHidden()[a.id]; await save(); if (view === 'collections') renderSmartAlbums(); } }); } });
+  const row = $('#catRow'), panel = $('#catPanel'); if (!row || !panel) return;
+  const tok = ++smartPaint;
+  paintCatCards(id => id === 'people' ? (peopleOn() ? '…' : 'Off') : (aiOn() ? '…' : 'None yet'));
+  if (!openCat) { panel.hidden = true; panel.innerHTML = ''; delete panel.dataset.cat; }
+  else if (panel.dataset.cat !== openCat) { panel.hidden = false; panel.dataset.cat = openCat; panel.innerHTML = `<div class="smart-empty"><span>Loading…</span></div>`; }
+  let peopleN = 0, peopleReady = false;
+  if (peopleOn()) { try { await People.open(idx); peopleReady = People.isOpen(); if (peopleReady) peopleN = peopleList().length; } catch (e) { console.warn('People open', e); } }
+  let albums = [];
+  if (aiOn()) { try { albums = (await getSmart()).filter(a => !smartHidden()[a.id]); } catch (e) { console.warn('smart albums', e); } }
+  if (tok !== smartPaint || view !== 'collections' || !idx) return;
+  const counts = { people: peopleN, place: 0, theme: 0, moment: 0, custom: 0 };
+  albums.forEach(a => { if (counts[a.kind] != null) counts[a.kind]++; });
+  paintCatCards(id => {
+    const n = counts[id] || 0;
+    if (id === 'people') return peopleOn() ? (n ? `${n} ${n === 1 ? 'person' : 'people'}` : (People.isRunning() ? 'Finding faces…' : 'None yet')) : 'Off';
+    return n ? plural(n, 'album') : 'None yet';
+  });
+  if (!openCat) { panel.hidden = true; panel.innerHTML = ''; panel.removeAttribute('aria-label'); return; }
+  panel.hidden = false;
+  const cat = CAT_DEFS.find(c => c[0] === openCat);
+  panel.setAttribute('aria-label', cat ? cat[1] : 'Category');
+  if (openCat === 'people') { paintPeoplePanel(panel, peopleReady); return; }
+  const xs = albums.filter(a => a.kind === openCat);
+  if (!xs.length) {
+    const off = !aiOn();
+    const msg = off ? 'On-device AI is off. Turn it on in Profile and these albums fill in on this device.'
+      : openCat === 'custom' ? 'Each custom AI tag gets an album here once it matches a few items. Add one under Custom tags.'
+      : openCat === 'moment' ? 'Moments group items taken around the same time, once a few share a date.'
+      : 'Auto albums show up here once on-device AI has looked at a few photos.';
+    panel.innerHTML = `<div class="smart-empty">${IC.spark}<span>${msg}</span></div><div class="cat-bar"><button class="txtbtn" type="button" data-nav="${openCat === 'custom' && !off ? 'tags' : 'profile'}">${openCat === 'custom' && !off ? 'Custom tags' : 'Profile'}</button></div>`;
+    hydrateIcons(panel); return;
+  }
+  panel.innerHTML = `<div class="smart-row">${xs.map(smartCard).join('')}</div>`;
+  bindSmartCards(panel);
+}
+function paintPeoplePanel(panel, ready) {
+  if (!peopleOn() || !ready) {
+    panel.innerHTML = `<div class="smart-empty">${IC.people}<span>${peopleOn() ? 'Finding faces on this device…' : 'People is off. Turn it on in Profile → On-device AI → People.'}</span></div><div class="cat-bar"><button class="txtbtn" type="button" data-nav="profile">Profile</button></div>`;
+    hydrateIcons(panel); return;
+  }
+  const L = peopleList();
+  panel.innerHTML = `<div class="cat-bar"><span>${L.length ? `${L.length} ${L.length === 1 ? 'person' : 'people'}` : 'No people yet'}</span><button class="txtbtn" type="button" data-nav="people">See all</button></div>` +
+    (L.length ? `<div class="prow wrap">${L.map(personCard).join('')}</div>` : `<div class="smart-empty">${IC.people}<span>People show up here once someone appears in at least two photos or videos.</span></div>`);
+  bindPeople(panel); hydrateIcons(panel);
+}
+async function saveSmartAsCollection(a) {
+  const items = a.ids.map(itemById).filter(i => i && !i.vault && !i.archived), cv = smartCover(a);
+  const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
+  const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
+  items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); });
+  await hideSmart(a, 'saved', { col: c.id }); toast(`Saved “${c.name}”. The auto album is now hidden`); openCollection(c.id);
 }
 async function renderSmartCollection() {
   await getSmart(); const a = smartById(curCol); if (!a) { nav('collections'); return; }
   const items = a.ids.map(itemById).filter(i => i && !i.vault && !i.archived), cv = smartCover(a);
   const h = $('#colHero'); h.style.setProperty('--fb', fbFor(a.id));
-  h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="tint user"></div><div class="hero-fade"></div>
-    <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${items.length} items · Smart album · ${KINDL[a.kind].replace(/s$/, '')}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>
-    <div class="hero-actions">${a.ct ? `<button class="btn btn-primary btn-sm" id="smRev">${IC.check || IC.spark}<span>Review</span></button><button class="btn btn-ghost btn-sm" id="smEdit">${IC.edit}<span>Edit tag</span></button>` : `<button class="btn btn-primary btn-sm" id="smReel">${IC.reel}<span>Highlights</span></button><button class="btn btn-ghost btn-sm" id="smSave">${IC.plus}<span>Save as collection</span></button>`}</div>`;
+  h.innerHTML = `${cv ? `<img alt="" data-tid="${cv.id}">` : ''}<div class="hero-fade"></div>
+    <div class="info"><h2>${esc(a.name)}</h2><p>${IC.spark}${plural(items.length, 'item')} · ${KINDL[a.kind] || 'Album'}${a.sub ? ' · ' + esc(a.sub) : ''}</p></div>`;
   hydrateCovers(h); h.classList.toggle('nocover', !cv);
-  if (a.ct) { const t = ctById(a.ct); $('#smRev').onclick = () => t && ctReview(t); $('#smEdit').onclick = () => t && ctEditor(t); }
-  else { $('#smReel').onclick = () => openReel(items, a.name); }
-  if (!a.ct) $('#smSave').onclick = async () => {
-    const name = (await promptBox('Save as collection', 'Creates a normal collection with these items. It won’t change automatically.', a.name, 'Save') || '').trim(); if (!name) return;
-    const c = { id: uid(), name: name.slice(0, 60), cover: cv ? cv.id : null, created: Date.now() }; idx.collections.push(c);
-    items.forEach(it => { if (!it.cols.includes(c.id)) it.cols.push(c.id); }); await hideSmart(a, 'saved', { col: c.id }); toast(`Saved “${c.name}”. The auto album is now hidden`); openCollection(c.id);
-  };
   updNav();
   const list = a.kind === 'moment' ? items.slice().sort((x, y) => Smart.timeOf(x) - Smart.timeOf(y)) : sortNew(items);
   renderGrid($('#colItems'), list, emptyHTML('spark', 'Nothing here right now', 'Auto albums update themselves as your library changes.'));
