@@ -1200,7 +1200,7 @@ async function repairAppFiles() {
 // first tap anywhere: bless one hidden <video> so Safari lets Velvet decode preview frames (see Thumbs.blessMedia)
 ['touchend', 'click', 'keydown'].forEach(ev => document.addEventListener(ev, e => Thumbs.blessMedia(e), { capture: true, passive: true }));
 /* ---------- preview diagnostics (v1.4.1) ---------- */
-const SW_VER = 'velvet-v15';
+const SW_VER = 'velvet-v16';
 function pvProblems() {
   if (!idx) return [];
   return idx.items.map((it, n) => ({ it, n: n + 1 })).filter(({ it }) => (it.pv && !it.pv.ok) || tileErrs.has(it.id) || (!it.thumb && !it.pv));
